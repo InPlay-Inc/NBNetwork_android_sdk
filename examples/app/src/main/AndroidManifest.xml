@@ -24,7 +24,7 @@
             </intent-filter>
         </activity>
 
-        <!-- EXTERNAL mode: the host app owns BLE scanning and feeds results to the SDK.
+        <!-- HOST_SCAN mode: the host app owns BLE scanning and feeds results to the SDK.
              BLE / foreground-service permissions are merged in from the SDK manifest. -->
         <service
             android:name=".ble.DemoScanService"

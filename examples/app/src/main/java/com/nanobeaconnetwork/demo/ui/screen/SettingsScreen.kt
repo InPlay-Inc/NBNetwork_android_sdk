@@ -13,13 +13,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
-import com.nanobeaconnetwork.NbnSdk
+import com.nanobeaconnetwork.NbnClient
 import com.nanobeaconnetwork.demo.ui.viewmodel.SettingsViewModel
 
 @Composable
 fun SettingsScreen(navController: NavController, vm: SettingsViewModel = viewModel()) {
     val settings by vm.state.collectAsState()
-    val reportStats by NbnSdk.reportStats.collectAsState()
+    val reportStats by NbnClient.reportStats.collectAsState()
 
     var serverUrlDraft by remember(settings.serverUrl) { mutableStateOf(settings.serverUrl) }
     var serverUrlWasFocused by remember { mutableStateOf(false) }

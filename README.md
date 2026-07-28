@@ -1,21 +1,32 @@
 # NanoBeaconNetwork Android SDK
 
-Android SDK for the **NanoBeaconNetwork** BLE beacon network. It parses NanoBeaconNetwork
-beacon advertisements (service UUID `0xFC32`), deduplicates sightings, and uploads reports to
-the NanoBeaconNetwork backend. Beacon payload decryption happens **server-side** — the SDK
+Android SDK for the **NanoBeaconNetwork** BLE beacon network. It scans NanoBeaconNetwork beacon
+advertisements (service UUID `0xFC32`), deduplicates sightings, and reports them **anonymously**
+to the NanoBeaconNetwork backend. Beacon payload decryption happens **server-side** — the SDK
 never holds beacon identity keys.
 
 [![Maven Central](https://img.shields.io/maven-central/v/com.nanobeaconnetwork/nbn-sdk.svg)](https://central.sonatype.com/artifact/com.nanobeaconnetwork/nbn-sdk)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
+## Features
+
+- **Two scan modes** — `SDK_SCAN` (the SDK runs its own foreground scan, default) or `HOST_SCAN`
+  (you feed results from your existing scanner).
+- **Background + reboot resilience** — foreground service with `START_STICKY`, and optional
+  auto-resume after device reboot (`restartOnBoot`, default on).
+- **Anonymous** — no login/account; the SDK fetches its own anonymous token. You manage nothing.
+- **Offline-first** — reports are queued in an encrypted (SQLCipher) local DB and uploaded in
+  batches; secrets live in Keystore-backed encrypted storage.
+
 ## Requirements
 
-- `minSdk` 29+
+- `minSdk` 29+ · `compileSdk` 36
 - Java 11 / Kotlin source & target compatibility
 
 ## Installation
 
-Available on Maven Central:
+Available on Maven Central (transitive deps — Retrofit, OkHttp, Room, SQLCipher,
+security-crypto, play-services-location — resolve automatically):
 
 ```kotlin
 // app/build.gradle.kts
@@ -24,49 +35,111 @@ dependencies {
 }
 ```
 
-Transitive dependencies (Retrofit, OkHttp, Room, SQLCipher, security-crypto,
-play-services-location) resolve automatically.
+## Quick start (SDK_SCAN — default)
 
-## Quick start
-
-By default the SDK runs in **EXTERNAL** scan mode: your app owns BLE scanning and feeds
-results to the SDK. This lets the SDK coexist with any BLE scanning you already do.
+In the default **SDK_SCAN** mode the SDK owns its own BLE scan via a foreground service that keeps
+running in the background and auto-restarts after a reboot. **Two calls are required:**
+`init(...)` (always) and `startScan()` — `init()` alone does **not** begin scanning.
 
 ```kotlin
-// 1. Initialize once, e.g. in Application.onCreate()
-NbnSdk.init(
+// 1. Initialize once, e.g. in Application.onCreate(). REQUIRED before any other SDK call.
+NbnClient.init(
     context,
     NbnConfig.Builder()
         // Defaults to https://api.nanobeaconnetwork.com — override only for testing.
         .logLevel(NbnConfig.LogLevel.WARN)
-        .build()
+        .build()   // scanSource defaults to SDK_SCAN; restartOnBoot defaults to true
 )
 
-// 2. Feed scan results from your own BluetoothLeScanner callback.
-//    Include the 0xFC32 service-data filter so NanoBeaconNetwork beacons are seen.
-override fun onScanResult(callbackType: Int, result: ScanResult) {
-    NbnSdk.submitScanResult(result)
+// 2. Request the runtime permissions (BLE + location; + notifications on Android 13+).
+if (!NbnPermissions.checkScanPermissions(context)) {
+    requestPermissionsLauncher.launch(NbnPermissions.getScanPermissions())
 }
+// For background scanning, also request ACCESS_BACKGROUND_LOCATION *after* foreground
+// location is granted (Android requires this two-step flow):
+//   NbnPermissions.checkBackgroundLocationPermission(context)
 
-// Or feed the raw 0xFC32 service-data block directly (framework-agnostic):
-// NbnSdk.submitServiceData(serviceData, rssi)
+// 3. Start scanning (REQUIRED to actually scan — init() does not auto-start).
+NbnClient.startScan()      // starts the SDK's foreground scan service
+// ...later...
+NbnClient.stopScan()
 
-// 3. Observe state (optional):
-lifecycleScope.launch { NbnSdk.reportStats.collect { /* update UI */ } }
+// Optional: observe stats / lifecycle.
+lifecycleScope.launch { NbnClient.reportStats.collect { /* update UI */ } }
 
-// 4. On shutdown:
-NbnSdk.shutdown()
+// On teardown:
+NbnClient.shutdown()
 ```
 
-If you prefer the SDK to own scanning (a foreground service), build the config with
-`.scanSource(NbnConfig.ScanSource.SDK_MANAGED)` and call `NbnSdk.startScan()` /
-`NbnSdk.stopScan()`. See the integration guide for permissions and background scanning.
+> **Do I still call `init` / `startScan` in SDK_SCAN?** Yes to both. `init(...)` is always
+> required, and `startScan()` is what begins scanning. The **only** time scanning resumes without
+> your code is **after a device reboot** — if you had called `startScan()` before and left
+> `restartOnBoot = true`, a boot receiver re-starts the service automatically (it self-initializes
+> the SDK). On a normal app launch you still call `init()` and `startScan()` yourself.
+
+## Alternative: HOST_SCAN (you already scan BLE)
+
+If your app already runs its own `BluetoothLeScanner`, use `HOST_SCAN` and feed results; the SDK
+then never touches BLE and `startScan()` is a no-op:
+
+```kotlin
+NbnClient.init(context, NbnConfig.Builder().scanSource(NbnConfig.ScanSource.HOST_SCAN).build())
+
+// From your own scan callback — the scan MUST include the 0xFC32 filter:
+override fun onScanResult(callbackType: Int, result: ScanResult) {
+    NbnClient.submitScanResult(result)
+}
+```
+
+See [INTEGRATION.md](INTEGRATION.md) for permissions, background/Doze, OEM battery caveats, and
+both modes in full detail.
+
+> **Migrating from an earlier build?** The default `scanSource` changed from `HOST_SCAN` to
+> `SDK_SCAN`. If your app fed results via `submitScanResult()`, you must now set
+> `.scanSource(NbnConfig.ScanSource.HOST_SCAN)` explicitly, or those calls become no-ops.
+
+## Permissions
+
+The SDK **declares** the BLE / location / foreground-service permissions in its manifest (they
+merge into your app) and provides the `NbnPermissions` helpers. But the **runtime permission
+dialog must be triggered by your app** from an `Activity`/`Fragment` — a library has no Activity
+and cannot (and shouldn't) pop the system prompt itself. The SDK's job is to tell you *which*
+permissions to request and *whether* they're granted; requesting them is the host's job.
+
+```kotlin
+class MainActivity : ComponentActivity() {
+
+    private val requestPermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        // Start once granted (SDK_SCAN). In HOST_SCAN, start your own scanner here instead.
+        if (NbnPermissions.checkScanPermissions(this)) NbnClient.startScan()
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (NbnPermissions.checkScanPermissions(this)) {
+            NbnClient.startScan()
+        } else {
+            requestPermissions.launch(NbnPermissions.getScanPermissions())  // shows the dialog
+        }
+    }
+}
+```
+
+- `getScanPermissions()` returns the right set for the OS version (location; `BLUETOOTH_SCAN` on
+  Android 12+; `POST_NOTIFICATIONS` on Android 13+ for the foreground-service notification).
+- **Background scanning** needs `ACCESS_BACKGROUND_LOCATION`, which Android requires you to
+  request **separately, *after* foreground location is granted** — check with
+  `NbnPermissions.checkBackgroundLocationPermission(context)`.
+- `NbnClient.init(...)` needs no permissions and can run anytime; permissions are only needed
+  when `startScan()` actually scans.
 
 ## Sample app
 
 A runnable example lives in [`examples/app`](examples/app) — a small Compose app that
 consumes the SDK from source (`implementation(project(":sdk"))`) and demonstrates
-EXTERNAL-mode scanning, report stats, and settings.
+HOST_SCAN-mode scanning, report stats, and settings.
 
 ```bash
 ./gradlew :examples:app:assembleDebug     # build the sample APK
@@ -76,7 +149,7 @@ EXTERNAL-mode scanning, report stats, and settings.
 ## Documentation
 
 - Full integration guide, permissions, and the 0xFC32 wire format: [INTEGRATION.md](INTEGRATION.md)
-- Public API: `NbnSdk`, `NbnConfig`, `NbnError`, `NbnPermissions`
+- Public API: `NbnClient`, `NbnConfig`, `NbnError`, `NbnPermissions`
 
 ## Building from source
 

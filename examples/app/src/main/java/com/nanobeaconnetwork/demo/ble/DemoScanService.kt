@@ -19,15 +19,15 @@ import android.os.ParcelUuid
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.nanobeaconnetwork.NbnSdk
+import com.nanobeaconnetwork.NbnClient
 import java.util.UUID
 
 /**
- * Host-owned BLE scan service (EXTERNAL-mode demo).
+ * Host-owned BLE scan service (HOST_SCAN-mode demo).
  *
  * This lives in the sample APP, not the SDK: it demonstrates a host app that runs its own
  * BluetoothLeScanner (with the required 0xFC32 filter) and feeds every result to
- * [NbnSdk.submitScanResult]. The SDK is configured with ScanSource.EXTERNAL and never touches
+ * [NbnClient.submitScanResult]. The SDK is configured with ScanSource.HOST_SCAN and never touches
  * BLE itself. A real customer that already scans BLE would simply add the submit call to their
  * existing scan callback instead of standing up a dedicated service like this.
  */
@@ -63,11 +63,11 @@ class DemoScanService : Service() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             // Host business logic could run here; then feed the SDK. Non-0xFC32 results are
             // ignored SDK-side, so it is safe to forward everything the host receives.
-            NbnSdk.submitScanResult(result)
+            NbnClient.submitScanResult(result)
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>) {
-            results.forEach { NbnSdk.submitScanResult(it) }
+            results.forEach { NbnClient.submitScanResult(it) }
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -135,7 +135,7 @@ class DemoScanService : Service() {
         adapter.bluetoothLeScanner.startScan(listOf(filter), settings, scanCallback)
         scanning = true
         DemoScanController.update(isScanning = true, bleEnabled = true)
-        Log.i(TAG, "Host BLE scan started (EXTERNAL mode), feeding NbnSdk.submitScanResult()")
+        Log.i(TAG, "Host BLE scan started (HOST_SCAN mode), feeding NbnClient.submitScanResult()")
     }
 
     @SuppressLint("MissingPermission")
@@ -155,7 +155,7 @@ class DemoScanService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val stats = NbnSdk.reportStats.value
+        val stats = NbnClient.reportStats.value
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("NanoBeaconNetwork Demo Scanning")
             .setContentText("Scanned: ${stats.todayScanCount} | Reported: ${stats.todayReportCount}")

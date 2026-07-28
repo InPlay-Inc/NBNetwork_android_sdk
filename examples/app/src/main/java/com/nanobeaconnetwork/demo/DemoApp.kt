@@ -3,7 +3,7 @@ package com.nanobeaconnetwork.demo
 import android.app.Application
 import android.content.SharedPreferences
 import com.nanobeaconnetwork.NbnConfig
-import com.nanobeaconnetwork.NbnSdk
+import com.nanobeaconnetwork.NbnClient
 
 class DemoApp : Application() {
     lateinit var appPrefs: SharedPreferences
@@ -16,12 +16,14 @@ class DemoApp : Application() {
 
         val config = NbnConfig.Builder()
             .serverUrl(serverUrl)
-            // EXTERNAL (also the default): the app owns BLE scanning (see DemoScanService) and
-            // feeds results via NbnSdk.submitScanResult(); the SDK never touches BLE itself.
-            .scanSource(NbnConfig.ScanSource.EXTERNAL)
+            // HOST_SCAN: the app owns BLE scanning (see DemoScanService) and feeds results via
+            // NbnClient.submitScanResult(); the SDK never touches BLE itself. (The SDK default is
+            // SDK_SCAN, where the SDK runs its own scan service — this sample overrides it to
+            // demonstrate host-owned scanning.)
+            .scanSource(NbnConfig.ScanSource.HOST_SCAN)
             .build()
 
-        NbnSdk.init(this, config)
+        NbnClient.init(this, config)
     }
 
     companion object {

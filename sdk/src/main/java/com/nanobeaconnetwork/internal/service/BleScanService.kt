@@ -19,7 +19,7 @@ import android.os.ParcelUuid
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.nanobeaconnetwork.NbnSdk
+import com.nanobeaconnetwork.NbnClient
 import com.nanobeaconnetwork.ble.AdvParser
 import com.nanobeaconnetwork.model.ScanEvent
 import kotlinx.coroutines.*
@@ -66,7 +66,7 @@ class BleScanService : Service() {
 
         override fun onScanFailed(errorCode: Int) {
             Log.e(TAG, "Scan failed: $errorCode")
-            NbnSdk.internalUpdateScanState(isScanning = false)
+            NbnClient.internalUpdateScanState(isScanning = false)
         }
     }
 
@@ -107,7 +107,7 @@ class BleScanService : Service() {
         if (VERBOSE) Log.d(TAG, "accept: eid=$eidHex payloadLen=${advData.payload.length} rssi=$rssi")
 
         scope.launch {
-            NbnSdk.internalOnScanResult(
+            NbnClient.internalOnScanResult(
                 eidHex = eidHex,
                 payloadHex = advData.payload,
                 rssi = rssi,
@@ -134,12 +134,24 @@ class BleScanService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(NOTIFICATION_ID, buildNotification(),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-                } else {
-                    startForeground(NOTIFICATION_ID, buildNotification())
+                // May be started by the host (startScan) or by BootReceiver after a reboot. On
+                // the boot path the host may not have called init() yet, so bring the SDK up
+                // from persisted state before any NbnClient access (buildNotification/startBle).
+                NbnClient.ensureInitialized(applicationContext)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(NOTIFICATION_ID, buildNotification(),
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+                    } else {
+                        startForeground(NOTIFICATION_ID, buildNotification())
+                    }
+                } catch (e: Exception) {
+                    // e.g. Android 14 rejects a location-type FGS when location permission was
+                    // revoked, or a background FGS start is disallowed. Fail gracefully.
+                    Log.e(TAG, "startForeground failed, stopping service: ${e.message}")
+                    stopSelf()
+                    return START_NOT_STICKY
                 }
                 startBle()
             }
@@ -152,7 +164,7 @@ class BleScanService : Service() {
         val btManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         val adapter = btManager.adapter
         if (adapter == null || !adapter.isEnabled) {
-            NbnSdk.internalUpdateScanState(isScanning = false, bleEnabled = false)
+            NbnClient.internalUpdateScanState(isScanning = false, bleEnabled = false)
             return
         }
         val filter = ScanFilter.Builder().setServiceUuid(SERVICE_UUID).build()
@@ -163,7 +175,7 @@ class BleScanService : Service() {
             .setReportDelay(reportDelay)
             .build()
         adapter.bluetoothLeScanner.startScan(listOf(filter), settings, scanCallback)
-        NbnSdk.internalUpdateScanState(isScanning = true, bleEnabled = true)
+        NbnClient.internalUpdateScanState(isScanning = true, bleEnabled = true)
         Log.i(TAG, "BLE scan started (filter=$SERVICE_UUID, scanMode=LOW_POWER, reportDelay=$reportDelay)")
     }
 
@@ -176,7 +188,7 @@ class BleScanService : Service() {
             Log.w(TAG, "Failed to stop BLE scan: ${e.message}")
         }
 
-        NbnSdk.internalUpdateScanState(isScanning = false)
+        NbnClient.internalUpdateScanState(isScanning = false)
 
         if (scope.isActive) {
             scope.cancel()
@@ -193,7 +205,7 @@ class BleScanService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val stats = NbnSdk.reportStats.value
+        val stats = NbnClient.reportStats.value
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("NanoBeaconNetwork Scanning")
             .setContentText("Scanned: ${stats.todayScanCount} | Reported: ${stats.todayReportCount}")

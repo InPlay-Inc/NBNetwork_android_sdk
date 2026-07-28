@@ -27,9 +27,16 @@ internal class SdkPrefs(context: Context) {
         get() = prefs.getString(KEY_ANONYMOUS_TOKEN, "") ?: ""
         set(v) = prefs.edit().putString(KEY_ANONYMOUS_TOKEN, v).apply()
 
+    // True while SDK_SCAN scanning is active. Set by NbnClient.startScan/stopScan; read by
+    // BootReceiver to decide whether to resume scanning after a reboot.
     var scanEnabled: Boolean
         get() = prefs.getBoolean(KEY_SCAN_ENABLED, false)
         set(v) = prefs.edit().putBoolean(KEY_SCAN_ENABLED, v).apply()
+
+    // Persisted NbnConfig.restartOnBoot, so BootReceiver knows the caller's preference.
+    var restartOnBoot: Boolean
+        get() = prefs.getBoolean(KEY_RESTART_ON_BOOT, true)
+        set(v) = prefs.edit().putBoolean(KEY_RESTART_ON_BOOT, v).apply()
 
     var dedupWindowSeconds: Int
         get() = prefs.getInt(KEY_DEDUP_WINDOW, 300)
@@ -60,6 +67,7 @@ internal class SdkPrefs(context: Context) {
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_ANONYMOUS_TOKEN = "anonymous_token"
         private const val KEY_SCAN_ENABLED = "scan_enabled"
+        private const val KEY_RESTART_ON_BOOT = "restart_on_boot"
         private const val KEY_DEDUP_WINDOW = "dedup_window_seconds"
         private const val KEY_REPORT_MIN_INTERVAL = "report_min_interval_seconds"
         private const val KEY_BATCH_THRESHOLD = "report_batch_threshold"

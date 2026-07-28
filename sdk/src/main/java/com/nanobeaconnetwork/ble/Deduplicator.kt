@@ -7,7 +7,7 @@ import java.util.concurrent.ConcurrentHashMap
  * Client-side de-duplication of scanned beacons.
  *
  * The key is the beacon's **BLE MAC address** (the physical-device identity, stable across EID
- * rotation); callers fall back to the EID hex only when no address is available (EXTERNAL
+ * rotation); callers fall back to the EID hex only when no address is available (the HOST_SCAN
  * service-data path). Within [ServerConfigManager.dedupWindowMs] a key is reported at most once.
  *
  * The last-seen timestamp is stamped at scan time and is deliberately **not** tied to whether the

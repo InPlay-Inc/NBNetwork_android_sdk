@@ -19,7 +19,7 @@ class MainActivity : ComponentActivity() {
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
-        // EXTERNAL mode: the host app owns scanning. Start our own scan service once granted.
+        // HOST_SCAN mode: the host app owns scanning. Start our own scan service once granted.
         if (NbnPermissions.checkScanPermissions(this)) {
             DemoScanController.update(hasPermissions = true)
             DemoScanController.start(this)
@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Start scanning on launch by default: if permissions are already granted, start
         // immediately; otherwise request them and start from the result callback.
-        // EXTERNAL mode — the sample app scans itself and feeds NbnSdk.submitScanResult().
+        // HOST_SCAN mode — the sample app scans itself and feeds NbnClient.submitScanResult().
         if (NbnPermissions.checkScanPermissions(this)) {
             DemoScanController.update(hasPermissions = true)
             DemoScanController.start(this)

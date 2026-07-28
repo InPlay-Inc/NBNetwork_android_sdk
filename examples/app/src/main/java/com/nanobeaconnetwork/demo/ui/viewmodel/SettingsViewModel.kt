@@ -4,7 +4,7 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.lifecycle.AndroidViewModel
 import com.nanobeaconnetwork.NbnConfig
-import com.nanobeaconnetwork.NbnSdk
+import com.nanobeaconnetwork.NbnClient
 import com.nanobeaconnetwork.demo.DemoApp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +26,6 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun saveServerUrl(url: String) {
         prefs.edit().putString("server_url", url).apply()
         _state.value = _state.value.copy(serverUrl = url)
-        NbnSdk.updateConfig(NbnConfig.Builder().serverUrl(url).build())
+        NbnClient.updateConfig(NbnConfig.Builder().serverUrl(url).build())
     }
 }

@@ -1,5 +1,6 @@
 package com.nanobeaconnetwork
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.bluetooth.le.ScanResult
@@ -33,9 +34,14 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
-object NbnSdk {
+// Safe by construction: the only Context this singleton — and the helpers it holds, e.g.
+// AnonymousTokenManager/LocationHelper — ever stores is context.applicationContext (set in
+// init()). The application context lives for the whole process, so nothing is leaked. Lint
+// can't prove the assignment is the app context, so StaticFieldLeak is suppressed object-wide.
+@SuppressLint("StaticFieldLeak")
+object NbnClient {
     private var _context: Context? = null
-    private val context get() = _context ?: error("NbnSdk not initialized. Call init() first.")
+    private val context get() = _context ?: error("NbnClient not initialized. Call init() first.")
 
     private lateinit var prefs: SdkPrefs
     private lateinit var configManager: ServerConfigManager
@@ -47,10 +53,10 @@ object NbnSdk {
 
     private val sdkScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private const val TAG = "NbnSdk"
+    private const val TAG = "NbnClient"
 
-    // Default EXTERNAL: the host app owns scanning and feeds results via submitScanResult().
-    private var scanSource: NbnConfig.ScanSource = NbnConfig.ScanSource.EXTERNAL
+    // Default SDK_SCAN: the SDK owns its own foreground scan service (start via startScan()).
+    private var scanSource: NbnConfig.ScanSource = NbnConfig.ScanSource.SDK_SCAN
 
     private val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
@@ -74,6 +80,7 @@ object NbnSdk {
         scanSource = config.scanSource
         prefs = SdkPrefs(context.applicationContext)
         if (config.serverUrl.isNotEmpty()) prefs.serverUrl = config.serverUrl
+        prefs.restartOnBoot = config.restartOnBoot
 
         configManager = ServerConfigManager(prefs)
 
@@ -122,41 +129,59 @@ object NbnSdk {
     }
 
     /**
-     * Start scanning. Only meaningful in SDK_MANAGED mode (starts the foreground scan service).
-     * In the default EXTERNAL mode this is a no-op — the host app owns scanning and must feed
-     * results via [submitScanResult] / [submitServiceData].
+     * Start scanning. Only meaningful in SDK_SCAN mode (starts the foreground scan service).
+     * In HOST_SCAN mode this is a no-op — the host app owns scanning and must feed results via
+     * [submitScanResult] / [submitServiceData].
      */
     fun startScan() {
-        if (scanSource == NbnConfig.ScanSource.EXTERNAL) {
-            Log.w(TAG, "startScan() ignored: scanSource=EXTERNAL. Feed results via submitScanResult().")
+        if (scanSource == NbnConfig.ScanSource.HOST_SCAN) {
+            Log.w(TAG, "startScan() ignored: scanSource=HOST_SCAN. Feed results via submitScanResult().")
             return
         }
+        // Persist the intent so BootReceiver can resume scanning after a reboot.
+        prefs.scanEnabled = true
         BleScanService.start(context)
     }
 
-    /** Stop scanning (SDK_MANAGED only; no-op in EXTERNAL mode). */
+    /** Stop scanning (SDK_SCAN only; no-op in HOST_SCAN mode). */
     fun stopScan() {
-        if (scanSource == NbnConfig.ScanSource.EXTERNAL) return
+        if (scanSource == NbnConfig.ScanSource.HOST_SCAN) return
+        prefs.scanEnabled = false
         BleScanService.stop(context)
     }
 
     /**
-     * EXTERNAL mode: feed a raw scan result from the host app's own scanner. The SDK extracts
-     * the 0xFC32 service data; results without it are ignored. No-op in SDK_MANAGED mode.
+     * Internal: bring the SDK up from persisted state when it is started by the system (e.g.
+     * BootReceiver after a reboot) before the host has called [init]. No-op if already
+     * initialized. Rebuilds a minimal SDK_SCAN config from prefs (persisted server URL).
+     */
+    internal fun ensureInitialized(context: Context) {
+        if (_context != null) return
+        val p = SdkPrefs(context.applicationContext)
+        val config = NbnConfig.Builder()
+            .serverUrl(p.serverUrl.ifEmpty { BuildConfig.DEFAULT_SERVER_URL })
+            .scanSource(NbnConfig.ScanSource.SDK_SCAN)
+            .build()
+        init(context.applicationContext, config)
+    }
+
+    /**
+     * HOST_SCAN mode: feed a raw scan result from the host app's own scanner. The SDK extracts
+     * the 0xFC32 service data; results without it are ignored. No-op in SDK_SCAN mode.
      */
     fun submitScanResult(result: ScanResult) {
-        if (scanSource != NbnConfig.ScanSource.EXTERNAL) return
+        if (scanSource != NbnConfig.ScanSource.HOST_SCAN) return
         val serviceData = result.scanRecord?.getServiceData(BleScanService.SERVICE_UUID) ?: return
         submitServiceData(serviceData, result.rssi, null, result.device?.address)
     }
 
     /**
-     * EXTERNAL mode: feed the 0xFC32 service-data block directly (framework-agnostic). [location]
-     * may be null, in which case the SDK fetches the current location itself. No-op in
-     * SDK_MANAGED mode.
+     * HOST_SCAN mode: feed the 0xFC32 service-data block directly (framework-agnostic). [location]
+     * may be null, in which case the SDK fetches the current location itself. No-op in SDK_SCAN
+     * mode.
      */
     fun submitServiceData(serviceData: ByteArray, rssi: Int, location: Location? = null, bleAddress: String? = null) {
-        if (scanSource != NbnConfig.ScanSource.EXTERNAL) return
+        if (scanSource != NbnConfig.ScanSource.HOST_SCAN) return
         val advData = AdvParser.parse(serviceData) ?: return
         val eidHex = advData.eid.joinToString("") { "%02x".format(it) }
         internalOnScanResult(eidHex, advData.payload, rssi, isoFormat.format(Date()), bleAddress, location)
@@ -176,7 +201,7 @@ object NbnSdk {
     }
 
     /**
-     * Central scan-result pipeline, shared by SDK_MANAGED (BleScanService) and EXTERNAL
+     * Central scan-result pipeline, shared by SDK_SCAN (BleScanService) and HOST_SCAN
      * (submitScanResult/submitServiceData): dedup -> location -> enqueue -> emit.
      * [explicitLocation] overrides the SDK's own location lookup when the caller already has one.
      */
