@@ -22,6 +22,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Guard against the exec bit being lost when gradlew is committed from Windows,
+      # where core.fileMode is false and the mode silently reverts to 100644.
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
       # Verifies gradle-wrapper.jar has not been tampered with (supply-chain check).
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v4
