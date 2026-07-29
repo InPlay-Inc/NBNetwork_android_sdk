@@ -9,8 +9,8 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Host-side scan controller for the HOST_SCAN-mode demo.
  *
- * In HOST_SCAN mode the SDK never touches BLE; the sample app (the "host") owns scanning and
- * feeds results into the SDK via [com.nanobeaconnetwork.NbnClient.submitScanResult]. This object holds
+ * In HOST_SCAN mode the library never touches BLE; the sample app (the "host") owns scanning and
+ * feeds results into the library via [com.nanobeaconnetwork.NbnClient.submitScanResult]. This object holds
  * the host's own scanning state for the UI and starts/stops the host foreground scan service.
  */
 object DemoScanController {

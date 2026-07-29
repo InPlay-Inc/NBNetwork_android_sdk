@@ -22,7 +22,9 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "nbn-sdk-android"
-include(":sdk")
-// Sample app consuming the SDK from source (maps to examples/app/).
+rootProject.name = "nanobeaconnetwork-android"
+include(":nbn")
+// Minimal external-consumer smoke app. It intentionally does not depend on the demo.
+include(":test:consumer")
+// Sample app consuming the library from source (maps to examples/app/).
 include(":examples:app")

@@ -6,8 +6,7 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Keystore-backed values cannot be restored on another device. -->
+    <exclude domain="sharedpref" path="nbn_prefs.xml"/>
+    <exclude domain="database" path="nbn.db"/>
 </full-backup-content>

@@ -1,4 +1,4 @@
-// Root build file for the NanoBeaconNetwork Android SDK.
+// Root build file for the NanoBeaconNetwork Android library.
 // Plugins are declared here (apply false) and applied per module
 // (:sdk = library, :examples:app = sample application).
 plugins {

@@ -25,9 +25,9 @@ import java.util.UUID
 /**
  * Host-owned BLE scan service (HOST_SCAN-mode demo).
  *
- * This lives in the sample APP, not the SDK: it demonstrates a host app that runs its own
+ * This lives in the sample APP, not the library: it demonstrates a host app that runs its own
  * BluetoothLeScanner (with the required 0xFC32 filter) and feeds every result to
- * [NbnClient.submitScanResult]. The SDK is configured with ScanSource.HOST_SCAN and never touches
+ * [NbnClient.submitScanResult]. The library is configured with ScanSource.HOST_SCAN and never touches
  * BLE itself. A real customer that already scans BLE would simply add the submit call to their
  * existing scan callback instead of standing up a dedicated service like this.
  */
@@ -61,8 +61,8 @@ class DemoScanService : Service() {
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            // Host business logic could run here; then feed the SDK. Non-0xFC32 results are
-            // ignored SDK-side, so it is safe to forward everything the host receives.
+            // Host business logic could run here; then feed the library. Non-0xFC32 results are
+            // ignored library-side, so it is safe to forward everything the host receives.
             NbnClient.submitScanResult(result)
         }
 

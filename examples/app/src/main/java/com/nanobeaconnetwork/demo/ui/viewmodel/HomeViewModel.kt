@@ -10,9 +10,9 @@ import com.nanobeaconnetwork.model.ScanState
 import kotlinx.coroutines.flow.StateFlow
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
-    // HOST_SCAN mode: scanning state comes from the host-owned scanner, not the SDK.
+    // HOST_SCAN mode: scanning state comes from the host-owned scanner, not the library.
     val scanState: StateFlow<ScanState> = DemoScanController.scanState
-    // Report stats / scan logs still come from the SDK's reporting pipeline.
+    // Report stats / scan logs still come from the library's reporting pipeline.
     val reportStats: StateFlow<ReportStats> = NbnClient.reportStats
     val scanLogs: StateFlow<List<ScanLogEntry>> = NbnClient.scanLogs
 

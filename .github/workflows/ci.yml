@@ -28,11 +28,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # Builds the library and the sample app (compilation + resource + packaging checks).
-      #
-      # NOTE: `:sdk:testDebugUnitTest` is intentionally omitted. Some AdvParser tests call
-      # android.util.Base64, which is not available in plain JVM unit tests (returns default
-      # values), so they only pass under Robolectric/instrumented tests. Add Robolectric and
-      # re-enable `:sdk:testDebugUnitTest` here once that is set up.
-      - name: Build SDK and sample
-        run: ./gradlew :sdk:assembleRelease :examples:app:assembleDebug --stacktrace
+      - name: Test and build library consumers
+        run: >-
+          ./gradlew :nbn:testDebugUnitTest :nbn:lintRelease :nbn:assembleRelease
+          :test:consumer:assembleRelease :examples:app:assembleDebug --stacktrace
