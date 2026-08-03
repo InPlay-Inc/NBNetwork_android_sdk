@@ -39,16 +39,19 @@ class ApiClientTest {
 
     @Test fun `batch request uses stable JSON field names`() = runTest {
         val prefs = prefs(server.url("/").toString().trimEnd('/'))
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"status":"ok","count":1}"""))
+        server.enqueue(MockResponse().setResponseCode(202).setBody("""{"status":"accepted","batch_id":"550e8400-e29b-41d4-a716-446655440000"}"""))
         val item = ReportItem(
+            observationId = "550e8400-e29b-41d4-a716-446655440001",
             payload = "AQID",
             rssi = -70,
             latitude = 37.1,
             longitude = -122.2,
-            timestamp = "2026-01-01T00:00:00Z",
+            clientSeenAt = "2026-01-01T00:00:00Z",
         )
 
-        val response = ApiClient(prefs, { null }).service.batchReport(BatchReportRequest(listOf(item)))
+        val response = ApiClient(prefs, { null }).service.batchReport(
+            BatchReportRequest("550e8400-e29b-41d4-a716-446655440000", listOf(item)),
+        )
 
         val request = server.takeRequest()
         val json = JsonParser.parseString(request.body.readUtf8()).asJsonObject
@@ -57,8 +60,11 @@ class ApiClientTest {
         assertEquals(-70, report.get("rssi").asInt)
         assertEquals(37.1, report.get("latitude").asDouble, 0.0)
         assertEquals(-122.2, report.get("longitude").asDouble, 0.0)
-        assertEquals("2026-01-01T00:00:00Z", report.get("timestamp").asString)
-        assertEquals(1, response.count)
+        assertEquals("550e8400-e29b-41d4-a716-446655440000", json.get("batch_id").asString)
+        assertEquals("550e8400-e29b-41d4-a716-446655440001", report.get("observation_id").asString)
+        assertEquals("2026-01-01T00:00:00Z", report.get("client_seen_at").asString)
+        assertEquals(202, response.code())
+        assertEquals("accepted", response.body()?.status)
     }
 
     @Test fun `service rebuilds after URL invalidation`() = runTest {

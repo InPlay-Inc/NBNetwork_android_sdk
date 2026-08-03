@@ -18,21 +18,22 @@ internal data class ConfigResponse(
 
 // Report
 internal data class ReportItem(
+    @SerializedName("observation_id") val observationId: String,
     @SerializedName("payload") val payload: String,
     @SerializedName("rssi") val rssi: Int,
     @SerializedName("latitude") val latitude: Double,
     @SerializedName("longitude") val longitude: Double,
-    @SerializedName("timestamp") val timestamp: String,
+    @SerializedName("client_seen_at") val clientSeenAt: String,
 )
 
 internal data class BatchReportRequest(
+    @SerializedName("batch_id") val batchId: String,
     @SerializedName("reports") val reports: List<ReportItem>,
 )
 
-// Server acknowledges a batch with {status, count} (no per-item accept info, no device_id).
-// A 2xx response means the whole batch was processed (stored, deduped, or dropped for
-// unknown EIDs) and must not be retried.
+// A matching 202 means only that the complete batch entered the durable processing chain.
+// No item count, EID existence, device id, or tag-verification result is exposed.
 internal data class BatchReportResponse(
     @SerializedName("status") val status: String? = null,
-    @SerializedName("count") val count: Int = 0,
+    @SerializedName("batch_id") val batchId: String? = null,
 )

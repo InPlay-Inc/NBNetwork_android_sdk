@@ -49,29 +49,31 @@ class ApiModelsSerializationTest {
     @Test
     fun `BatchReportRequest round-trips with stable field names`() {
         val request = BatchReportRequest(
+            "550e8400-e29b-41d4-a716-446655440000",
             listOf(
                 ReportItem(
+                    observationId = "550e8400-e29b-41d4-a716-446655440001",
                     payload = "AQID",
                     rssi = -70,
                     latitude = 37.1,
                     longitude = -122.2,
-                    timestamp = "2026-01-01T00:00:00Z",
+                    clientSeenAt = "2026-01-01T00:00:00Z",
                 ),
             ),
         )
 
         val json = JsonParser.parseString(gson.toJson(request)).asJsonObject
-        assertEquals(setOf("reports"), json.keySet())
+        assertEquals(setOf("batch_id", "reports"), json.keySet())
         val item = json.getAsJsonArray("reports")[0].asJsonObject
         assertEquals(
-            setOf("payload", "rssi", "latitude", "longitude", "timestamp"),
+            setOf("observation_id", "payload", "rssi", "latitude", "longitude", "client_seen_at"),
             item.keySet(),
         )
         assertEquals("AQID", item.get("payload").asString)
         assertEquals(-70, item.get("rssi").asInt)
         assertEquals(37.1, item.get("latitude").asDouble, 0.0)
         assertEquals(-122.2, item.get("longitude").asDouble, 0.0)
-        assertEquals("2026-01-01T00:00:00Z", item.get("timestamp").asString)
+        assertEquals("2026-01-01T00:00:00Z", item.get("client_seen_at").asString)
 
         // And back: the library never deserializes ReportItem, but the round-trip proves the mapping.
         val restored = gson.fromJson(gson.toJson(request), BatchReportRequest::class.java)
@@ -80,16 +82,19 @@ class ApiModelsSerializationTest {
     }
 
     @Test
-    fun `BatchReportResponse maps status and count`() {
-        val resp = gson.fromJson("""{"status":"ok","count":3}""", BatchReportResponse::class.java)
-        assertEquals("ok", resp.status)
-        assertEquals(3, resp.count)
+    fun `BatchReportResponse maps fixed accepted envelope`() {
+        val resp = gson.fromJson(
+            """{"status":"accepted","batch_id":"550e8400-e29b-41d4-a716-446655440000"}""",
+            BatchReportResponse::class.java,
+        )
+        assertEquals("accepted", resp.status)
+        assertEquals("550e8400-e29b-41d4-a716-446655440000", resp.batchId)
     }
 
     @Test
     fun `BatchReportResponse applies defaults when fields are absent`() {
         val resp = gson.fromJson("{}", BatchReportResponse::class.java)
         assertEquals(null, resp.status)
-        assertEquals(0, resp.count)
+        assertEquals(null, resp.batchId)
     }
 }

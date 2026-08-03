@@ -25,7 +25,9 @@ the report payload and is not sent by the library.
 
 - Anonymous token, runtime configuration, and the database passphrase use encrypted preferences.
 - Pending observations use a SQLCipher-encrypted Room database.
-- The local queue is capped at 10,000 records; records expire after seven days or ten failed tries.
+- The local queue keeps only the newest unsent observation per physical BLE source. A record expires
+  after one hour or six ordinary failed attempts. The queue is capped at 50,000 rows or an estimated
+  50 MiB; when full, a new source returns `QueueFull` instead of evicting existing data.
 
 `nbn_prefs.xml` contains Keystore-backed encrypted values, including the key for
 `nbn.db`. Android Keystore keys are not

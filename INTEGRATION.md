@@ -399,8 +399,25 @@ lifecycleScope.launch { NbnClient.reportStats.collect { s -> updateUi(s.pendingC
 |---|---|---|
 | `scanState` | `StateFlow<ScanState>` | `isScanning`, `bleEnabled`, `gpsEnabled`, `hasPermissions` (driven by the library only in LIBRARY_SCAN mode) |
 | `scanEvents` | `SharedFlow<ScanEvent>` | one per scanned beacon: `eidHex`, `rssi`, `timestamp`, `reported` (false = de-duped) |
-| `reportStats` | `StateFlow<ReportStats>` | scan/report counts, `pendingCount`, `successRate`, `rateLimited` |
+| `reportStats` | `StateFlow<ReportStats>` | scan/report counts, pending rows, terminal failure/expiry/invalid/queue-full counters, `successRate`, `rateLimited` |
 | `scanLogs` | `StateFlow<List<ScanLogEntry>>` | last 100 log lines (time, EID prefix, rssi, status) |
+
+### Report queue behavior
+
+- With a BLE address, the library identifies the physical source with an install-keyed HMAC of the
+  normalized MAC address. The digest stays local. `submitServiceData(..., bleAddress = null)` falls
+  back to EID, so an EID rotation cannot be linked to the same physical beacon.
+- Scan deduplication uses `(physical source, payload)`: an exact retransmission is suppressed within
+  the configured window, but a changed payload from the same MAC always reaches the latest-data queue.
+- Only the newest unsent observation is kept per source. An already-sent HTTP request remains an
+  immutable `in_flight` row; a newer observation uses a separate `pending_latest` row.
+- A matching `202 {"status":"accepted","batch_id":"..."}` means durable server admission only,
+  not tag validity. It is the only response that removes the corresponding in-flight rows.
+- Ordinary attempts occur immediately and approximately 1, 3, 7, 15, and 30 minutes after the
+  observation was created, with up to ±20% jitter. Six ordinary failures or age one hour removes
+  the observation. `429/503` do not consume an attempt but cannot extend the one-hour lifetime.
+- Queue capacity is 50,000 rows or an estimated 50 MiB. A new source is rejected with `QueueFull`
+  when full; existing rows are not silently evicted.
 
 ---
 
@@ -411,7 +428,7 @@ lifecycleScope.launch { NbnClient.reportStats.collect { s -> updateUi(s.pendingC
 - **Change reboot resume:** `NbnClient.setRestartOnBoot(enable)`
 - **Release resources:** `NbnClient.shutdown()`
 - **Flow-control params** (dedup window, report interval, batch threshold) are pushed by the
-  server (on the anonymous-token response, on `GET /api/v1/config`, and on 429) — you don't set
+  server (on the anonymous-token response and on `GET /api/v1/config`) — you don't set
   them. Sensible defaults apply until the first fetch.
 
 ### Privacy and backup
@@ -453,8 +470,10 @@ or collecting via `kotlinx-coroutines-jdk`.)
   optimization for your app; check OEM-specific autostart/background settings.
 - **`startScan()` seems to do nothing** → expected in HOST_SCAN mode; feed via
   `submitScanResult()` instead (§5).
-- **Reports not uploading** → check `reportStats.rateLimited` and network; the library retries with
-  backoff and keeps data in an offline queue (up to 7 days / 10,000 records).
+- **Reports not uploading** → check `reportStats.rateLimited` and network. A latest observation gets
+  at most six ordinary send attempts and expires after one hour. HTTP `429/503` obey
+  `Retry-After` without consuming an ordinary attempt. Inspect `failedCount`, `expiredCount`,
+  `invalidCount`, and `queueFullCount` for terminal outcomes.
 - **Duplicate-looking beacons not all reported** → by design: the same EID within the server's
   dedup window is reported once (`ScanEvent.reported = false` marks the de-duped ones).
 
@@ -535,4 +554,4 @@ Enums: `ScanSource { LIBRARY_SCAN, HOST_SCAN }` ·
 | `ScanState` | `isScanning`, `bleEnabled`, `gpsEnabled`, `hasPermissions` |
 | `ScanEvent` | `eidHex`, `rssi`, `timestamp`, `reported` (`false` = de-duplicated) |
 | `ScanLogEntry` | `time`, `eidPrefix`, `rssi`, `status` (`Queued` / `Reported` / `Duplicate` / `Failed`) |
-| `ReportStats` | `todayScanCount`, `todayReportCount`, `pendingCount`, `failedCount`, `droppedCount`, `successRate`, `rateLimited` |
+| `ReportStats` | `todayScanCount`, `todayReportCount`, `pendingCount`, `failedCount`, `expiredCount`, `invalidCount`, `queueFullCount`, `successRate`, `rateLimited` |

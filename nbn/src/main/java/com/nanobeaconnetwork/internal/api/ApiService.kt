@@ -9,7 +9,7 @@ internal interface ApiService {
 
     // Report
     @POST("api/v1/report/batch")
-    suspend fun batchReport(@Body body: BatchReportRequest): BatchReportResponse
+    suspend fun batchReport(@Body body: BatchReportRequest): retrofit2.Response<BatchReportResponse>
 
     // Config (public): latest client runtime config, fetched on launch.
     @GET("api/v1/config")

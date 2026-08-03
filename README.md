@@ -1,7 +1,7 @@
 # NanoBeaconNetwork for Android
 
 Android library for the **NanoBeaconNetwork** BLE beacon network. It scans NanoBeaconNetwork beacon
-advertisements (service UUID `0xFC32`), deduplicates sightings, and reports them using an
+advertisements (service UUID `0xFC32`), suppresses exact repeated broadcasts, and reports them using an
 **account-free client token**. Beacon payload decryption happens **server-side** — the library
 never holds beacon identity keys.
 
@@ -15,8 +15,9 @@ never holds beacon identity keys.
 - **Background resilience** — foreground service with `START_STICKY`; reboot recovery is on by
   default, and takes effect once your app grants `ACCESS_BACKGROUND_LOCATION`.
 - **Account-free** — no user login; the library obtains a token tied to the app/device Android ID.
-- **Offline-first** — reports are queued in an encrypted (SQLCipher) local DB and uploaded in
-  batches; secrets live in Keystore-backed encrypted storage.
+- **Latest-data-first** — each physical BLE source keeps only its newest pending observation;
+  retry is bounded to six ordinary attempts or one hour, whichever comes first. Reports are queued
+  in an encrypted (SQLCipher) local DB; secrets live in Keystore-backed encrypted storage.
 
 ## Requirements
 
@@ -31,7 +32,7 @@ security-crypto, play-services-location — resolve automatically):
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("com.nanobeaconnetwork:nanobeaconnetwork-android:0.1.0")
+    implementation("com.nanobeaconnetwork:nanobeaconnetwork-android:0.2.0")
 }
 ```
 
@@ -181,6 +182,17 @@ The whole host-facing surface, in `com.nanobeaconnetwork` (models in `….model`
 | `ScanState`, `ScanEvent`, `ScanLogEntry`, `ReportStats` | Read-only state exposed as flows on `NbnClient` |
 
 Full signatures, defaults, and per-mode caveats: [INTEGRATION.md](INTEGRATION.md) §14.
+
+### Report delivery semantics
+
+- A matching HTTP `202 accepted` confirms only that the complete batch entered the server's durable
+  processing chain. It does not mean a beacon tag was valid or that every item will be verified.
+- A new sighting replaces an older unsent sighting from the same BLE MAC. If an HTTP request is
+  already in flight, it stays immutable while the new sighting occupies a separate latest slot.
+- Each latest sighting gets at most six ordinary send attempts and expires after one hour. HTTP
+  `429` and `503` obey `Retry-After` without consuming that attempt budget.
+- The local queue is capped at 50,000 rows or an estimated 50 MiB. At capacity the new item reports
+  `QueueFull`; the library never silently evicts another beacon's data.
 
 ## Sample app
 

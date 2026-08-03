@@ -75,4 +75,4 @@ jobs:
         with:
           generate_release_notes: true
           fail_on_unmatched_files: false
-          files: sdk/build/outputs/aar/*.aar
+          files: nbn/build/outputs/aar/*.aar

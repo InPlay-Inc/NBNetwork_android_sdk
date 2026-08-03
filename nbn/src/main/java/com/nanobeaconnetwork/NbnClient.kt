@@ -22,6 +22,8 @@ import com.nanobeaconnetwork.model.ScanEvent
 import com.nanobeaconnetwork.model.ScanLogEntry
 import com.nanobeaconnetwork.model.ScanState
 import com.nanobeaconnetwork.report.ReportManager
+import com.nanobeaconnetwork.report.EnqueueResult
+import com.nanobeaconnetwork.report.SourceKeyFactory
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -132,10 +134,8 @@ object NbnClient {
         reportManager = ReportManager(db.pendingReportDao(), apiClient, configManager, sdkScope)
         reportManager.start()
 
-        // Reconcile scan-log entries with what the server actually acknowledged: promote the
-        // batch's "Queued" entries to "Reported". The server response is aggregate-only
-        // ({status,count}) with no per-item verdict, so when some records were dropped we
-        // can't tell which — the dropped total is surfaced via reportStats.droppedCount.
+        // A matching 202 only means the batch entered the server's durable bounded chain.
+        // It intentionally reveals no EID or tag-verification result.
         sdkScope.launch {
             reportManager.flushResults.collect { result ->
                 markReported(result.eidPrefixes)
@@ -298,9 +298,11 @@ object NbnClient {
         explicitLocation: Location? = null,
     ) {
         sdkScope.launch {
-            // Dedup per physical device: prefer the (static) BLE MAC address, which is stable
-            // across EID rotation; fall back to the EID when no address is available.
-            val dedupKey = bleAddress?.takeIf { it.isNotBlank() } ?: eidHex
+            // Suppress only an exact repeated broadcast from the same source. Including the
+            // payload is essential: a changed payload from the same BLE MAC is new data and
+            // must reach ReportManager so it can replace that source's pending_latest row.
+            val physicalKey = bleAddress?.takeIf { it.isNotBlank() } ?: eidHex
+            val dedupKey = "$physicalKey:$payloadHex"
             val isDuplicate = deduplicator.isDuplicate(dedupKey)
             val event = ScanEvent(eidHex = eidHex, rssi = rssi,
                 timestamp = System.currentTimeMillis(), reported = !isDuplicate)
@@ -311,10 +313,12 @@ object NbnClient {
                 val location = explicitLocation ?: locationHelper.getLocation()
                 val lat = location?.latitude ?: 0.0
                 val lon = location?.longitude ?: 0.0
-                reportManager.enqueue(eidHex, payloadHex, rssi, lat, lon, timestamp)
-                // Only enqueued locally so far — not yet confirmed by the server. It flips
-                // to "Reported" once ReportManager reports a successful flush (see init()).
-                status = "Queued"
+                val sourceKey = SourceKeyFactory.create(bleAddress, eidHex, prefs.sourceKeyHmacKey)
+                status = when (reportManager.enqueue(sourceKey, eidHex, payloadHex, rssi, lat, lon, timestamp)) {
+                    EnqueueResult.Queued -> "Queued"
+                    EnqueueResult.QueueFull -> "QueueFull"
+                    EnqueueResult.Invalid -> "Invalid"
+                }
             } else {
                 status = "Duplicate"
             }
@@ -351,14 +355,13 @@ object NbnClient {
         }
     }
 
-    // Flip "Queued" scan-log entries whose EID prefix was in a server-acknowledged batch to
-    // "Reported". Prefixes may repeat, so update every matching queued entry.
+    // Flip queued entries to Accepted after a matching 202. This is not a tag-valid verdict.
     private fun markReported(eidPrefixes: List<String>) {
         if (eidPrefixes.isEmpty()) return
         val prefixes = eidPrefixes.toSet()
         _scanLogs.update { current ->
             current.map {
-                if (it.status == "Queued" && it.eidPrefix in prefixes) it.copy(status = "Reported") else it
+                if (it.status == "Queued" && it.eidPrefix in prefixes) it.copy(status = "Accepted") else it
             }
         }
     }

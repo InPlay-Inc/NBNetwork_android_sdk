@@ -70,6 +70,15 @@ internal class NbnPrefs(context: Context) {
             return key
         }
 
+    /** Per-install secret used only to unlinkably hash normalized BLE addresses. */
+    val sourceKeyHmacKey: ByteArray
+        get() {
+            prefs.getString(KEY_SOURCE_HMAC, null)?.let { return Base64.decode(it, Base64.NO_WRAP) }
+            val key = ByteArray(32).also { SecureRandom().nextBytes(it) }
+            prefs.edit().putString(KEY_SOURCE_HMAC, Base64.encodeToString(key, Base64.NO_WRAP)).apply()
+            return key
+        }
+
     companion object {
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_ANONYMOUS_TOKEN = "anonymous_token"
@@ -80,5 +89,6 @@ internal class NbnPrefs(context: Context) {
         private const val KEY_REPORT_MIN_INTERVAL = "report_min_interval_seconds"
         private const val KEY_BATCH_THRESHOLD = "report_batch_threshold"
         private const val KEY_DB_PASSPHRASE = "db_passphrase"
+        private const val KEY_SOURCE_HMAC = "source_key_hmac"
     }
 }

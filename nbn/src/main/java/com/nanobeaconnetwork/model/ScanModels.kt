@@ -18,5 +18,5 @@ data class ScanLogEntry(
     val time: String,
     val eidPrefix: String,
     val rssi: Int,
-    val status: String,  // "Queued" | "Reported" | "Duplicate" | "Failed"
+    val status: String, // "Queued" | "Accepted" | "Duplicate" | "QueueFull" | "Invalid"
 )
