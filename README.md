@@ -186,6 +186,8 @@ Full signatures, defaults, and per-mode caveats: [INTEGRATION.md](INTEGRATION.md
 ### Report delivery semantics
 
 - A matching HTTP `202 accepted` confirms only that the complete batch entered the server's durable
+- When location is unavailable, the SDK sends both `latitude` and `longitude` as JSON `null`;
+  it never substitutes the real Gulf of Guinea coordinate `(0,0)`.
   processing chain. It does not mean a beacon tag was valid or that every item will be verified.
 - A new sighting replaces an older unsent sighting from the same BLE MAC. If an HTTP request is
   already in flight, it stays immutable while the new sighting occupies a separate latest slot.

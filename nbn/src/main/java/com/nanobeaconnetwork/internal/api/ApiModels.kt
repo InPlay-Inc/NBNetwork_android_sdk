@@ -21,8 +21,8 @@ internal data class ReportItem(
     @SerializedName("observation_id") val observationId: String,
     @SerializedName("payload") val payload: String,
     @SerializedName("rssi") val rssi: Int,
-    @SerializedName("latitude") val latitude: Double,
-    @SerializedName("longitude") val longitude: Double,
+    @SerializedName("latitude") val latitude: Double?,
+    @SerializedName("longitude") val longitude: Double?,
     @SerializedName("client_seen_at") val clientSeenAt: String,
 )
 

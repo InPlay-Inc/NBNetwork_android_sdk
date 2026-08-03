@@ -311,8 +311,8 @@ object NbnClient {
             val status: String
             if (!isDuplicate) {
                 val location = explicitLocation ?: locationHelper.getLocation()
-                val lat = location?.latitude ?: 0.0
-                val lon = location?.longitude ?: 0.0
+                val lat = location?.latitude
+                val lon = location?.longitude
                 val sourceKey = SourceKeyFactory.create(bleAddress, eidHex, prefs.sourceKeyHmacKey)
                 status = when (reportManager.enqueue(sourceKey, eidHex, payloadHex, rssi, lat, lon, timestamp)) {
                     EnqueueResult.Queued -> "Queued"

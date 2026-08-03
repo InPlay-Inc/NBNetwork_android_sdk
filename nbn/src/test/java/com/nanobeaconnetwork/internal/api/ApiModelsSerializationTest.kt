@@ -5,6 +5,7 @@ import com.google.gson.JsonParser
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.Assert.assertTrue
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
@@ -21,7 +22,7 @@ import org.robolectric.annotation.Config
 class ApiModelsSerializationTest {
 
     // Same builder the library uses in ApiClient.buildService().
-    private val gson = GsonBuilder().create()
+    private val gson = GsonBuilder().serializeNulls().create()
 
     @Test
     fun `AnonymousTokenRequest serializes deviceId as android_id`() {
@@ -79,6 +80,34 @@ class ApiModelsSerializationTest {
         val restored = gson.fromJson(gson.toJson(request), BatchReportRequest::class.java)
         assertEquals(request.reports[0].payload, restored.reports[0].payload)
         assertEquals(request.reports[0].rssi, restored.reports[0].rssi)
+    }
+
+    @Test
+    fun `BatchReportRequest renders absent location as paired JSON nulls`() {
+        val request = BatchReportRequest(
+            "550e8400-e29b-41d4-a716-446655440000",
+            listOf(
+                ReportItem(
+                    observationId = "550e8400-e29b-41d4-a716-446655440001",
+                    payload = "AQID",
+                    rssi = -70,
+                    latitude = null,
+                    longitude = null,
+                    clientSeenAt = "2026-01-01T00:00:00Z",
+                ),
+            ),
+        )
+
+        val item = JsonParser.parseString(gson.toJson(request))
+            .asJsonObject
+            .getAsJsonArray("reports")[0]
+            .asJsonObject
+        assertEquals(
+            setOf("observation_id", "payload", "rssi", "latitude", "longitude", "client_seen_at"),
+            item.keySet(),
+        )
+        assertTrue(item.get("latitude").isJsonNull)
+        assertTrue(item.get("longitude").isJsonNull)
     }
 
     @Test

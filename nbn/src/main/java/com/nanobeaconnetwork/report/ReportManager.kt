@@ -89,8 +89,8 @@ internal class ReportManager(
         eidHex: String,
         payloadBase64: String,
         rssi: Int,
-        latitude: Double,
-        longitude: Double,
+        latitude: Double?,
+        longitude: Double?,
         clientSeenAt: String,
     ): EnqueueResult = queueMutex.withLock {
         todayScan.incrementAndGet()
@@ -325,13 +325,18 @@ internal class ReportManager(
     private fun isLocallyValid(
         eidHex: String,
         payloadBase64: String,
-        latitude: Double,
-        longitude: Double,
+        latitude: Double?,
+        longitude: Double?,
         clientSeenAt: String,
     ): Boolean = runCatching {
         require(Regex("^[0-9a-fA-F]{16}$").matches(eidHex))
         require(Base64.getDecoder().decode(payloadBase64).size == 23)
-        require(latitude in -90.0..90.0 && longitude in -180.0..180.0)
+        require((latitude == null) == (longitude == null))
+        if (latitude != null && longitude != null) {
+            require(latitude.isFinite() && longitude.isFinite())
+            require(latitude in -90.0..90.0)
+            require(longitude in -180.0..180.0)
+        }
         Instant.parse(clientSeenAt)
     }.isSuccess
 

@@ -59,7 +59,9 @@ class ReportManagerTest {
         source: String = "mac:source-a",
         payload: String = validPayload,
         seenAt: String = "2026-01-01T00:00:00Z",
-    ) = manager.enqueue(source, "0011223344556677", payload, -70, 37.0, -122.0, seenAt)
+        latitude: Double? = 37.0,
+        longitude: Double? = -122.0,
+    ) = manager.enqueue(source, "0011223344556677", payload, -70, latitude, longitude, seenAt)
 
     private fun echoAccepted() {
         server.dispatcher = object : Dispatcher() {
@@ -84,6 +86,33 @@ class ReportManagerTest {
         assertNotEquals(first.observationId, latest.observationId)
         assertNotEquals(first.payloadBase64, latest.payloadBase64)
         assertEquals(1_000L, latest.createdAt)
+    }
+
+    @Test fun `absent location queues and sends paired JSON nulls`() = runTest {
+        val dao = FakeDao()
+        val manager = manager(dao) { 1_000L }
+        echoAccepted()
+
+        assertEquals(EnqueueResult.Queued, enqueue(manager, latitude = null, longitude = null))
+        assertEquals(null, dao.snapshot().single().latitude)
+        assertEquals(null, dao.snapshot().single().longitude)
+        manager.tryFlush()
+
+        val report = JsonParser.parseString(server.takeRequest().body.readUtf8())
+            .asJsonObject
+            .getAsJsonArray("reports")[0]
+            .asJsonObject
+        assertTrue(report.get("latitude").isJsonNull)
+        assertTrue(report.get("longitude").isJsonNull)
+    }
+
+    @Test fun `one missing coordinate is rejected before queueing`() = runTest {
+        val dao = FakeDao()
+        val manager = manager(dao) { 1_000L }
+
+        assertEquals(EnqueueResult.Invalid, enqueue(manager, latitude = 31.0, longitude = null))
+        assertEquals(EnqueueResult.Invalid, enqueue(manager, source = "mac:other", latitude = null, longitude = 121.0))
+        assertTrue(dao.snapshot().isEmpty())
     }
 
     @Test fun `new data during HTTP keeps one in flight and one pending then drops failed old`() = runTest {

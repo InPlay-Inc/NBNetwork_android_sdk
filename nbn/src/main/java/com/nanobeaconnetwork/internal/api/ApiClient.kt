@@ -46,7 +46,7 @@ internal class ApiClient(
             )
         }
 
-        val gson = GsonBuilder().create()
+        val gson = GsonBuilder().serializeNulls().create()
 
         return Retrofit.Builder()
             .baseUrl(baseUrl)

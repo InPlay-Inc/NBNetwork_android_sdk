@@ -8,7 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
-@Database(entities = [PendingReport::class], version = 2, exportSchema = false)
+@Database(entities = [PendingReport::class], version = 3, exportSchema = false)
 internal abstract class NbnDatabase : RoomDatabase() {
     abstract fun pendingReportDao(): PendingReportDao
 
@@ -69,12 +69,54 @@ internal abstract class NbnDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE pending_reports_v3 (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        observationId TEXT NOT NULL,
+                        sourceKey TEXT NOT NULL,
+                        slot TEXT NOT NULL,
+                        batchId TEXT,
+                        eidHex TEXT NOT NULL,
+                        payloadBase64 TEXT NOT NULL,
+                        rssi INTEGER NOT NULL,
+                        latitude REAL,
+                        longitude REAL,
+                        clientSeenAt TEXT NOT NULL,
+                        failedAttempts INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        expiresAt INTEGER NOT NULL,
+                        nextAttemptAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO pending_reports_v3
+                      (id,observationId,sourceKey,slot,batchId,eidHex,payloadBase64,rssi,
+                       latitude,longitude,clientSeenAt,failedAttempts,createdAt,expiresAt,nextAttemptAt)
+                    SELECT id,observationId,sourceKey,slot,batchId,eidHex,payloadBase64,rssi,
+                           latitude,longitude,clientSeenAt,failedAttempts,createdAt,expiresAt,nextAttemptAt
+                    FROM pending_reports
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE pending_reports")
+                db.execSQL("ALTER TABLE pending_reports_v3 RENAME TO pending_reports")
+                db.execSQL("CREATE UNIQUE INDEX index_pending_reports_observationId ON pending_reports(observationId)")
+                db.execSQL("CREATE UNIQUE INDEX index_pending_reports_sourceKey_slot ON pending_reports(sourceKey,slot)")
+                db.execSQL("CREATE INDEX index_pending_reports_slot_nextAttemptAt ON pending_reports(slot,nextAttemptAt)")
+                db.execSQL("CREATE INDEX index_pending_reports_batchId ON pending_reports(batchId)")
+            }
+        }
+
         private fun buildDatabase(context: Context, passphrase: ByteArray): NbnDatabase {
             System.loadLibrary("sqlcipher")
             val factory = SupportOpenHelperFactory(passphrase)
             return Room.databaseBuilder(context.applicationContext, NbnDatabase::class.java, "nbn.db")
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
         }
     }
