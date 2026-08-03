@@ -32,6 +32,7 @@ internal class ApiClient(
         val authInterceptor = AuthInterceptor(prefs, ensureAnonymousTokenFn)
 
         val clientBuilder = OkHttpClient.Builder()
+            .callTimeout(60, TimeUnit.SECONDS)
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)

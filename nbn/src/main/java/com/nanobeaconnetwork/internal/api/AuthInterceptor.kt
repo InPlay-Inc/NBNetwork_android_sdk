@@ -23,6 +23,8 @@ internal class AuthInterceptor(
         val isAuthEndpoint = originalRequest.url.encodedPath
             .endsWith("/api/v1/auth/anonymous-token")
 
+        val isReportEndpoint = originalRequest.url.encodedPath
+            .endsWith("/api/v1/report/batch")
         var token = prefs.anonymousToken
 
         // Lazy anonymous-token fetch: any non-auth call without a token triggers a one-shot
@@ -56,7 +58,9 @@ internal class AuthInterceptor(
                     ensureAnonymousTokenFn()
                 }
             }
-            if (!newToken.isNullOrEmpty()) {
+            // A report body is signed over the exact bearer token. Refresh now, but let the
+            // queue rebuild its evidence before retrying instead of replaying a stale body.
+            if (!newToken.isNullOrEmpty() && !isReportEndpoint) {
                 response.close()
                 val retried = chain.request().newBuilder()
                     .header("Authorization", "Bearer $newToken")

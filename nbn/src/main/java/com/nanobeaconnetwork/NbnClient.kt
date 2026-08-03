@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.location.Location
 import android.util.Log
+import androidx.core.location.LocationCompat
 import com.nanobeaconnetwork.auth.AnonymousTokenManager
 import com.nanobeaconnetwork.ble.AdvParser
 import com.nanobeaconnetwork.ble.Deduplicator
@@ -15,7 +16,10 @@ import com.nanobeaconnetwork.internal.api.ApiClient
 import com.nanobeaconnetwork.internal.config.ServerConfigManager
 import com.nanobeaconnetwork.internal.db.NbnDatabase
 import com.nanobeaconnetwork.internal.prefs.NbnPrefs
+import com.nanobeaconnetwork.internal.security.AndroidInstallationIdentity
+import com.nanobeaconnetwork.internal.security.InstallationKeyException
 import com.nanobeaconnetwork.internal.service.BleScanService
+import com.nanobeaconnetwork.internal.time.BootSessionClock
 import com.nanobeaconnetwork.location.LocationHelper
 import com.nanobeaconnetwork.model.ReportStats
 import com.nanobeaconnetwork.model.ScanEvent
@@ -127,11 +131,32 @@ object NbnClient {
             debug = config.logLevel == NbnConfig.LogLevel.DEBUG,
         )
 
-        anonymousTokenManager = AnonymousTokenManager(context.applicationContext, prefs, apiClient)
+        val installationIdentity = AndroidInstallationIdentity()
+        anonymousTokenManager = AnonymousTokenManager(installationIdentity, prefs, apiClient)
         anonymousHolder.fn = { anonymousTokenManager.ensureAnonymousToken().getOrNull() }
 
         val db = NbnDatabase.getInstance(context.applicationContext, prefs.databasePassphrase)
-        reportManager = ReportManager(db.pendingReportDao(), apiClient, configManager, sdkScope)
+        val bootClock = BootSessionClock(context.applicationContext)
+        reportManager = ReportManager(
+            db.pendingReportDao(),
+            apiClient,
+            configManager,
+            sdkScope,
+            elapsedClockMs = bootClock::elapsedRealtimeMs,
+            bootAnchor = bootClock::anchor,
+            evidenceProvider = { request ->
+                var bearer = anonymousTokenManager.ensureAnonymousToken().getOrThrow()
+                try {
+                    installationIdentity.signReport(request, bearer)
+                } catch (_: InstallationKeyException) {
+                    installationIdentity.rotate()
+                    prefs.anonymousToken = ""
+                    prefs.anonymousTokenInstallationKeyId = ""
+                    bearer = anonymousTokenManager.ensureAnonymousToken().getOrThrow()
+                    installationIdentity.signReport(request, bearer)
+                }
+            },
+        )
         reportManager.start()
 
         // A matching 202 only means the batch entered the server's durable bounded chain.
@@ -311,10 +336,25 @@ object NbnClient {
             val status: String
             if (!isDuplicate) {
                 val location = explicitLocation ?: locationHelper.getLocation()
-                val lat = location?.latitude
-                val lon = location?.longitude
+                val usableLocation = location?.takeIf {
+                    it.hasAccuracy() && it.accuracy.isFinite() && it.accuracy >= 0f &&
+                        it.latitude.isFinite() && it.latitude in -90.0..90.0 &&
+                        it.longitude.isFinite() && it.longitude in -180.0..180.0
+                }
+                val lat = usableLocation?.latitude
+                val lon = usableLocation?.longitude
+                val accuracy = usableLocation?.accuracy?.toDouble()
+                val locationSource = when {
+                    usableLocation == null -> "unknown"
+                    explicitLocation != null -> "host_supplied"
+                    else -> "sdk_fused"
+                }
+                val locationIsMock = usableLocation?.let(LocationCompat::isMock) ?: false
                 val sourceKey = SourceKeyFactory.create(bleAddress, eidHex, prefs.sourceKeyHmacKey)
-                status = when (reportManager.enqueue(sourceKey, eidHex, payloadHex, rssi, lat, lon, timestamp)) {
+                status = when (reportManager.enqueue(
+                    sourceKey, eidHex, payloadHex, rssi, lat, lon, accuracy,
+                    locationSource, locationIsMock, timestamp,
+                )) {
                     EnqueueResult.Queued -> "Queued"
                     EnqueueResult.QueueFull -> "QueueFull"
                     EnqueueResult.Invalid -> "Invalid"

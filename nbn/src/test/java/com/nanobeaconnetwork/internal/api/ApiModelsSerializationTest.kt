@@ -25,10 +25,16 @@ class ApiModelsSerializationTest {
     private val gson = GsonBuilder().serializeNulls().create()
 
     @Test
-    fun `AnonymousTokenRequest serializes deviceId as android_id`() {
-        val json = JsonParser.parseString(gson.toJson(AnonymousTokenRequest("device-42"))).asJsonObject
-        assertEquals(setOf("android_id"), json.keySet())
-        assertEquals("device-42", json.get("android_id").asString)
+    fun `AnonymousTokenRequest serializes only installation proof`() {
+        val json = JsonParser.parseString(
+            gson.toJson(AnonymousTokenRequest("key-1", "public-1", "signature-1")),
+        ).asJsonObject
+        assertEquals(
+            setOf("installation_key_id", "installation_public_key", "installation_signature"),
+            json.keySet(),
+        )
+        assertEquals("key-1", json.get("installation_key_id").asString)
+        assertEquals(false, json.has("android_id"))
     }
 
     @Test
@@ -58,16 +64,22 @@ class ApiModelsSerializationTest {
                     rssi = -70,
                     latitude = 37.1,
                     longitude = -122.2,
+                    locationAccuracyMeters = 12.5,
+                    locationSource = "sdk_fused",
+                    locationIsMock = false,
                     clientSeenAt = "2026-01-01T00:00:00Z",
                 ),
             ),
         )
 
         val json = JsonParser.parseString(gson.toJson(request)).asJsonObject
-        assertEquals(setOf("batch_id", "reports"), json.keySet())
+        assertEquals(setOf("batch_id", "reports", "request_evidence"), json.keySet())
         val item = json.getAsJsonArray("reports")[0].asJsonObject
         assertEquals(
-            setOf("observation_id", "payload", "rssi", "latitude", "longitude", "client_seen_at"),
+            setOf(
+                "observation_id", "payload", "rssi", "latitude", "longitude",
+                "location_accuracy_m", "location_source", "location_is_mock", "client_seen_at",
+            ),
             item.keySet(),
         )
         assertEquals("AQID", item.get("payload").asString)
@@ -93,6 +105,9 @@ class ApiModelsSerializationTest {
                     rssi = -70,
                     latitude = null,
                     longitude = null,
+                    locationAccuracyMeters = null,
+                    locationSource = "unknown",
+                    locationIsMock = false,
                     clientSeenAt = "2026-01-01T00:00:00Z",
                 ),
             ),
@@ -103,11 +118,17 @@ class ApiModelsSerializationTest {
             .getAsJsonArray("reports")[0]
             .asJsonObject
         assertEquals(
-            setOf("observation_id", "payload", "rssi", "latitude", "longitude", "client_seen_at"),
+            setOf(
+                "observation_id", "payload", "rssi", "latitude", "longitude",
+                "location_accuracy_m", "location_source", "location_is_mock", "client_seen_at",
+            ),
             item.keySet(),
         )
         assertTrue(item.get("latitude").isJsonNull)
         assertTrue(item.get("longitude").isJsonNull)
+        assertTrue(item.get("location_accuracy_m").isJsonNull)
+        assertEquals("unknown", item.get("location_source").asString)
+        assertEquals(false, item.get("location_is_mock").asBoolean)
     }
 
     @Test

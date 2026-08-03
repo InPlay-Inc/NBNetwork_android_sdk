@@ -8,7 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
-@Database(entities = [PendingReport::class], version = 3, exportSchema = false)
+@Database(entities = [PendingReport::class], version = 4, exportSchema = false)
 internal abstract class NbnDatabase : RoomDatabase() {
     abstract fun pendingReportDao(): PendingReportDao
 
@@ -111,12 +111,58 @@ internal abstract class NbnDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Version 3 only stored wall-clock deadlines. Their age cannot be proven
+                // after an upgrade, so fail closed instead of repackaging old observations.
+                db.execSQL("DROP TABLE pending_reports")
+                db.execSQL(
+                    """
+                    CREATE TABLE pending_reports (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        observationId TEXT NOT NULL,
+                        sourceKey TEXT NOT NULL,
+                        slot TEXT NOT NULL,
+                        batchId TEXT,
+                        eidHex TEXT NOT NULL,
+                        payloadBase64 TEXT NOT NULL,
+                        rssi INTEGER NOT NULL,
+                        latitude REAL,
+                        longitude REAL,
+                        locationAccuracyMeters REAL,
+                        locationSource TEXT NOT NULL,
+                        locationIsMock INTEGER NOT NULL,
+                        clientSeenAt TEXT NOT NULL,
+                        failedAttempts INTEGER NOT NULL,
+                        createdElapsedRealtimeMs INTEGER NOT NULL,
+                        createdWallTimeMs INTEGER NOT NULL,
+                        bootAnchor TEXT NOT NULL,
+                        expiresElapsedRealtimeMs INTEGER NOT NULL,
+                        nextAttemptElapsedRealtimeMs INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX index_pending_reports_observationId " +
+                        "ON pending_reports(observationId)",
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX index_pending_reports_sourceKey_slot " +
+                        "ON pending_reports(sourceKey,slot)",
+                )
+                db.execSQL(
+                    "CREATE INDEX index_pending_reports_slot_nextAttemptElapsedRealtimeMs " +
+                        "ON pending_reports(slot,nextAttemptElapsedRealtimeMs)",
+                )
+                db.execSQL("CREATE INDEX index_pending_reports_batchId ON pending_reports(batchId)")
+            }
+        }
         private fun buildDatabase(context: Context, passphrase: ByteArray): NbnDatabase {
             System.loadLibrary("sqlcipher")
             val factory = SupportOpenHelperFactory(passphrase)
             return Room.databaseBuilder(context.applicationContext, NbnDatabase::class.java, "nbn.db")
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
         }
     }

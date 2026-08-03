@@ -50,7 +50,23 @@ class ReportManagerTest {
     }
 
     private fun manager(dao: FakeDao, now: () -> Long) =
-        ReportManager(dao, apiClient(), config(), kotlinx.coroutines.CoroutineScope(Dispatchers.IO), now) { 0.5 }
+        manager(dao, now, now)
+
+    private fun manager(
+        dao: FakeDao,
+        wallNow: () -> Long,
+        elapsedNow: () -> Long,
+        anchor: String = "boot:1",
+    ) =
+        ReportManager(
+            dao,
+            apiClient(),
+            config(),
+            kotlinx.coroutines.CoroutineScope(Dispatchers.IO),
+            wallClockMs = wallNow,
+            elapsedClockMs = elapsedNow,
+            bootAnchor = { anchor },
+        ) { 0.5 }
 
     private val validPayload = Base64.getEncoder().encodeToString(ByteArray(23) { it.toByte() })
 
@@ -61,7 +77,10 @@ class ReportManagerTest {
         seenAt: String = "2026-01-01T00:00:00Z",
         latitude: Double? = 37.0,
         longitude: Double? = -122.0,
-    ) = manager.enqueue(source, "0011223344556677", payload, -70, latitude, longitude, seenAt)
+    ) = manager.enqueue(
+        source, "0011223344556677", payload, -70, latitude, longitude,
+        if (latitude == null) null else 10.0, if (latitude == null) "unknown" else "sdk_fused", false, seenAt,
+    )
 
     private fun echoAccepted() {
         server.dispatcher = object : Dispatcher() {
@@ -85,7 +104,7 @@ class ReportManagerTest {
         assertEquals(first.id, latest.id)
         assertNotEquals(first.observationId, latest.observationId)
         assertNotEquals(first.payloadBase64, latest.payloadBase64)
-        assertEquals(1_000L, latest.createdAt)
+        assertEquals(1_000L, latest.createdElapsedRealtimeMs)
     }
 
     @Test fun `absent location queues and sends paired JSON nulls`() = runTest {
@@ -103,6 +122,9 @@ class ReportManagerTest {
             .getAsJsonArray("reports")[0]
             .asJsonObject
         assertTrue(report.get("latitude").isJsonNull)
+        assertTrue(report.get("location_accuracy_m").isJsonNull)
+        assertEquals("unknown", report.get("location_source").asString)
+        assertFalse(report.get("location_is_mock").asBoolean)
         assertTrue(report.get("longitude").isJsonNull)
     }
 
@@ -155,7 +177,7 @@ class ReportManagerTest {
         assertEquals(1, manager.stats.value.todayReportCount)
         val request = server.takeRequest()
         val json = JsonParser.parseString(request.body.readUtf8()).asJsonObject
-        assertEquals(setOf("batch_id", "reports"), json.keySet())
+        assertEquals(setOf("batch_id", "reports", "request_evidence"), json.keySet())
         assertFalse(json.has("source_key"))
         assertEquals(1, json.getAsJsonArray("reports").size())
     }
@@ -171,7 +193,7 @@ class ReportManagerTest {
 
         assertEquals(1, dao.snapshot().size)
         assertEquals(1, dao.snapshot().single().failedAttempts)
-        now = dao.snapshot().single().nextAttemptAt
+        now = dao.snapshot().single().nextAttemptElapsedRealtimeMs
     }
 
     @Test fun `429 and 503 preserve ordinary failure budget and honor retry after`() = runTest {
@@ -184,7 +206,7 @@ class ReportManagerTest {
 
             val row = dao.snapshot().single()
             assertEquals(0, row.failedAttempts)
-            assertEquals(130_000L, row.nextAttemptAt)
+            assertEquals(130_000L, row.nextAttemptElapsedRealtimeMs)
             assertTrue(manager.stats.value.rateLimited)
         }
     }
@@ -199,7 +221,7 @@ class ReportManagerTest {
         val first = JsonParser.parseString(server.takeRequest().body.readUtf8()).asJsonObject
             .get("batch_id").asString
 
-        now = dao.snapshot().single().nextAttemptAt
+        now = dao.snapshot().single().nextAttemptElapsedRealtimeMs
         echoAccepted()
         manager.tryFlush()
         val second = JsonParser.parseString(server.takeRequest().body.readUtf8()).asJsonObject
@@ -221,10 +243,15 @@ class ReportManagerTest {
                 rssi = -70,
                 latitude = 37.0,
                 longitude = -122.0,
+                locationAccuracyMeters = 10.0,
+                locationSource = "sdk_fused",
+                locationIsMock = false,
                 clientSeenAt = "2026-01-01T00:00:00Z",
-                createdAt = 1_000L,
-                expiresAt = 3_601_000L,
-                nextAttemptAt = 1_000L,
+                createdElapsedRealtimeMs = 1_000L,
+                createdWallTimeMs = 1_000L,
+                bootAnchor = "boot:1",
+                expiresElapsedRealtimeMs = 301_000L,
+                nextAttemptElapsedRealtimeMs = 1_000L,
             ),
         )
         val manager = manager(dao) { 2_000L }
@@ -246,7 +273,10 @@ class ReportManagerTest {
                 slot = PendingReport.SLOT_IN_FLIGHT, batchId = UUID.randomUUID().toString(),
                 eidHex = "0011223344556677", payloadBase64 = oldPayload, rssi = -70,
                 latitude = 37.0, longitude = -122.0, clientSeenAt = "2026-01-01T00:00:00Z",
-                createdAt = 1_000L, expiresAt = 3_601_000L, nextAttemptAt = 1_000L,
+                locationAccuracyMeters = 10.0, locationSource = "sdk_fused", locationIsMock = false,
+                createdElapsedRealtimeMs = 1_000L, createdWallTimeMs = 1_000L,
+                bootAnchor = "boot:1", expiresElapsedRealtimeMs = 301_000L,
+                nextAttemptElapsedRealtimeMs = 1_000L,
             ),
         )
         dao.upsertLatest(
@@ -254,7 +284,10 @@ class ReportManagerTest {
                 observationId = UUID.randomUUID().toString(), sourceKey = "mac:restart-newer",
                 eidHex = "0011223344556677", payloadBase64 = newPayload, rssi = -69,
                 latitude = 38.0, longitude = -121.0, clientSeenAt = "2026-01-01T00:00:01Z",
-                createdAt = 1_500L, expiresAt = 3_601_500L, nextAttemptAt = 1_500L,
+                locationAccuracyMeters = 10.0, locationSource = "sdk_fused", locationIsMock = false,
+                createdElapsedRealtimeMs = 1_500L, createdWallTimeMs = 1_500L,
+                bootAnchor = "boot:1", expiresElapsedRealtimeMs = 301_500L,
+                nextAttemptElapsedRealtimeMs = 1_500L,
             ),
         )
         val manager = manager(dao) { 2_000L }
@@ -267,27 +300,33 @@ class ReportManagerTest {
         assertTrue(dao.snapshot().isEmpty())
     }
 
-    @Test fun `six ordinary failures delete observation and increment failed count`() = runTest {
+    @Test fun `ordinary failures retain observation until five minute hard deadline`() = runTest {
         val dao = FakeDao()
         var now = 100_000L
         val manager = manager(dao) { now }
         enqueue(manager)
-        repeat(6) {
+        repeat(2) {
             server.enqueue(MockResponse().setResponseCode(500))
             manager.tryFlush()
-            dao.snapshot().firstOrNull()?.let { row -> now = maxOf(row.nextAttemptAt, now + 60_000) }
+            dao.snapshot().firstOrNull()?.let { row -> now = maxOf(row.nextAttemptElapsedRealtimeMs, now + 60_000) }
         }
+        assertEquals(1, dao.snapshot().size)
+        assertEquals(2, dao.snapshot().single().failedAttempts)
+        assertEquals(0, manager.stats.value.failedCount)
+
+        now = 400_000L
+        manager.tryFlush()
         assertTrue(dao.snapshot().isEmpty())
-        assertEquals(1, manager.stats.value.failedCount)
-        assertEquals(6, server.requestCount)
+        assertEquals(1, manager.stats.value.expiredCount)
+        assertEquals(2, server.requestCount)
     }
 
-    @Test fun `one hour expiry deletes unsent latest observation`() = runTest {
+    @Test fun `five minute expiry deletes unsent latest observation`() = runTest {
         val dao = FakeDao()
         var now = 5_000L
         val manager = manager(dao) { now }
         enqueue(manager)
-        now += 60L * 60 * 1_000
+        now += 5L * 60 * 1_000
         manager.tryFlush()
 
         assertTrue(dao.snapshot().isEmpty())
@@ -295,6 +334,41 @@ class ReportManagerTest {
         assertEquals(0, server.requestCount)
     }
 
+
+    @Test fun `wall clock jumps do not age or repackage an observation`() = runTest {
+        val dao = FakeDao()
+        var wallNow = 1_000_000L
+        var elapsedNow = 5_000L
+        val manager = manager(dao, { wallNow }, { elapsedNow })
+        enqueue(manager)
+        val observationID = dao.snapshot().single().observationId
+
+        wallNow += 30L * 24 * 60 * 60 * 1_000
+        elapsedNow += 1_000L
+        echoAccepted()
+        manager.tryFlush()
+
+        val sent = JsonParser.parseString(server.takeRequest().body.readUtf8()).asJsonObject
+            .getAsJsonArray("reports")[0].asJsonObject
+        assertEquals(observationID, sent.get("observation_id").asString)
+        assertTrue(dao.snapshot().isEmpty())
+    }
+
+    @Test fun `unverifiable prior boot rows are discarded without upload`() = runTest {
+        val dao = FakeDao()
+        var elapsedNow = 10_000L
+        val firstBoot = manager(dao, { 100_000L }, { elapsedNow }, "boot:1")
+        enqueue(firstBoot)
+        assertEquals("boot:1", dao.snapshot().single().bootAnchor)
+
+        elapsedNow = 100L
+        val secondBoot = manager(dao, { 200_000L }, { elapsedNow }, "boot:2")
+        secondBoot.tryFlush()
+
+        assertTrue(dao.snapshot().isEmpty())
+        assertEquals(1, secondBoot.stats.value.expiredCount)
+        assertEquals(0, server.requestCount)
+    }
     @Test fun `full queue returns QueueFull without deleting another source`() = runTest {
         val dao = FakeDao(baseCount = 50_000)
         val manager = manager(dao) { 1_000L }
@@ -329,12 +403,12 @@ private class FakeDao(
         rows.count { it.sourceKey == sourceKey && it.slot == PendingReport.SLOT_PENDING }
 
     override suspend fun fetchReady(now: Long, limit: Int) = rows
-        .filter { it.slot == PendingReport.SLOT_PENDING && it.nextAttemptAt <= now }
-        .sortedWith(compareBy<PendingReport> { it.createdAt }.thenBy { it.id }).take(limit)
+        .filter { it.slot == PendingReport.SLOT_PENDING && it.nextAttemptElapsedRealtimeMs <= now }
+        .sortedWith(compareBy<PendingReport> { it.createdElapsedRealtimeMs }.thenBy { it.id }).take(limit)
 
     override suspend fun fetchReadyBatch(batchId: String, now: Long, limit: Int) = rows
-        .filter { it.slot == PendingReport.SLOT_PENDING && it.batchId == batchId && it.nextAttemptAt <= now }
-        .sortedWith(compareBy<PendingReport> { it.createdAt }.thenBy { it.id }).take(limit)
+        .filter { it.slot == PendingReport.SLOT_PENDING && it.batchId == batchId && it.nextAttemptElapsedRealtimeMs <= now }
+        .sortedWith(compareBy<PendingReport> { it.createdElapsedRealtimeMs }.thenBy { it.id }).take(limit)
 
     override suspend fun markInFlight(ids: List<Long>, batchId: String): Int {
         var changed = 0
@@ -363,7 +437,7 @@ private class FakeDao(
             slot = PendingReport.SLOT_PENDING,
             batchId = batchId,
             failedAttempts = failedAttempts,
-            nextAttemptAt = nextAttemptAt,
+            nextAttemptElapsedRealtimeMs = nextAttemptAt,
         )
         return 1
     }
@@ -374,7 +448,10 @@ private class FakeDao(
         }
     }
 
-    override suspend fun fetchExpired(now: Long) = rows.filter { it.expiresAt <= now }
+    override suspend fun fetchExpired(now: Long) = rows.filter { it.expiresElapsedRealtimeMs <= now }
+
+    override suspend fun fetchFromOtherBoots(bootAnchor: String) =
+        rows.filter { it.bootAnchor != bootAnchor }
 
     override suspend fun deleteByIds(ids: List<Long>): Int {
         val before = rows.size

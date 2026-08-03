@@ -4,6 +4,7 @@ import android.util.Log
 import com.nanobeaconnetwork.internal.api.ApiClient
 import com.nanobeaconnetwork.internal.api.BatchReportRequest
 import com.nanobeaconnetwork.internal.api.ReportItem
+import com.nanobeaconnetwork.internal.api.RequestEvidence
 import com.nanobeaconnetwork.internal.config.ServerConfigManager
 import com.nanobeaconnetwork.internal.db.PendingReport
 import com.nanobeaconnetwork.internal.db.PendingReportDao
@@ -36,9 +37,8 @@ internal enum class EnqueueResult { Queued, QueueFull, Invalid }
 private const val TAG = "ReportManager"
 private const val MAX_QUEUE_ITEMS = 50_000
 private const val MAX_QUEUE_BYTES = 50L * 1024 * 1024
-private const val MAX_FAILED_ATTEMPTS = 6
 private const val BATCH_SIZE = 50
-private const val EXPIRE_MS = 60L * 60 * 1000
+private const val RETENTION_MS = 5L * 60 * 1000
 private const val MAX_RETRY_AFTER_SECONDS = 86_400L
 private val RETRY_OFFSETS_MS = longArrayOf(60_000, 180_000, 420_000, 900_000, 1_800_000)
 
@@ -47,7 +47,10 @@ internal class ReportManager(
     private val apiClient: ApiClient,
     private val configManager: ServerConfigManager,
     private val scope: CoroutineScope,
-    private val clockMs: () -> Long = System::currentTimeMillis,
+    private val wallClockMs: () -> Long = System::currentTimeMillis,
+    private val elapsedClockMs: () -> Long,
+    private val bootAnchor: () -> String,
+    private val evidenceProvider: suspend (BatchReportRequest) -> RequestEvidence? = { null },
     private val randomUnit: () -> Double = { Random.nextDouble() },
 ) {
     private val _stats = MutableStateFlow(ReportStats())
@@ -64,6 +67,7 @@ internal class ReportManager(
     private var recovered = false
     private var forceSingleItem = false
     private val todayScan = AtomicInteger(0)
+    private var bootChecked = false
     private val todayAccepted = AtomicInteger(0)
     private val failed = AtomicInteger(0)
     private val expired = AtomicInteger(0)
@@ -91,16 +95,30 @@ internal class ReportManager(
         rssi: Int,
         latitude: Double?,
         longitude: Double?,
+        locationAccuracyMeters: Double?,
+        locationSource: String,
+        locationIsMock: Boolean,
         clientSeenAt: String,
     ): EnqueueResult = queueMutex.withLock {
         todayScan.incrementAndGet()
-        if (!isLocallyValid(eidHex, payloadBase64, latitude, longitude, clientSeenAt)) {
+        if (!isLocallyValid(
+                eidHex,
+                payloadBase64,
+                latitude,
+                longitude,
+                locationAccuracyMeters,
+                locationSource,
+                locationIsMock,
+                clientSeenAt,
+            )
+        ) {
             invalid.incrementAndGet()
             updateStats()
             return@withLock EnqueueResult.Invalid
         }
 
-        val now = clockMs()
+        val nowElapsed = elapsedClockMs()
+        ensureCurrentBoot()
         val previous = dao.findPending(sourceKey)
         val next = PendingReport(
             id = previous?.id ?: 0,
@@ -111,10 +129,15 @@ internal class ReportManager(
             rssi = rssi,
             latitude = latitude,
             longitude = longitude,
+            locationAccuracyMeters = locationAccuracyMeters,
+            locationSource = locationSource,
+            locationIsMock = locationIsMock,
             clientSeenAt = clientSeenAt,
-            createdAt = now,
-            expiresAt = now + EXPIRE_MS,
-            nextAttemptAt = now,
+            createdElapsedRealtimeMs = nowElapsed,
+            createdWallTimeMs = wallClockMs(),
+            bootAnchor = bootAnchor(),
+            expiresElapsedRealtimeMs = nowElapsed + RETENTION_MS,
+            nextAttemptElapsedRealtimeMs = nowElapsed,
         )
         val projectedCount = dao.count() + if (previous == null) 1 else 0
         val projectedBytes = dao.estimatedBytes() - (previous?.estimatedBytes() ?: 0) + next.estimatedBytes()
@@ -132,9 +155,10 @@ internal class ReportManager(
     internal suspend fun tryFlush() = flushMutex.withLock { tryFlushLocked() }
 
     private suspend fun tryFlushLocked() {
-        val now = clockMs()
+        val now = elapsedClockMs()
         queueMutex.withLock {
             if (!recovered) {
+                ensureCurrentBoot()
                 recoverInterruptedRequests(now)
                 recovered = true
             }
@@ -151,7 +175,7 @@ internal class ReportManager(
             return
         }
         val batchId = requireNotNull(pending.first().batchId)
-        val request = BatchReportRequest(
+        val businessRequest = BatchReportRequest(
             batchId = batchId,
             reports = pending.map {
                 ReportItem(
@@ -161,11 +185,15 @@ internal class ReportManager(
                     latitude = it.latitude,
                     longitude = it.longitude,
                     clientSeenAt = it.clientSeenAt,
+                    locationAccuracyMeters = it.locationAccuracyMeters,
+                    locationSource = it.locationSource,
+                    locationIsMock = it.locationIsMock,
                 )
             },
         )
 
         try {
+            val request = businessRequest.copy(requestEvidence = evidenceProvider(businessRequest))
             val response = apiClient.service.batchReport(request)
             handleResponse(response, pending, batchId, now)
         } catch (e: Exception) {
@@ -271,16 +299,10 @@ internal class ReportManager(
                 continue
             }
             val failures = row.failedAttempts + if (countedFailure) 1 else 0
-            if (failures >= MAX_FAILED_ATTEMPTS) {
-                dao.deleteByIds(listOf(row.id))
-                failed.incrementAndGet()
-                contentChanged = true
-            } else {
-                survivors += row to failures
-            }
+            survivors += row to failures
         }
         val commonNextAt = fixedNextAt ?: survivors.maxOfOrNull { (row, failures) ->
-            if (!countedFailure) now else retryAt(row.createdAt, failures, now)
+            if (!countedFailure) now else retryAt(row.createdElapsedRealtimeMs, failures, now)
         } ?: now
         for ((row, failures) in survivors) {
             dao.requeue(
@@ -292,10 +314,20 @@ internal class ReportManager(
         }
     }
 
-    private fun retryAt(createdAt: Long, failureCount: Int, now: Long): Long {
+    private fun retryAt(createdElapsedRealtimeMs: Long, failureCount: Int, now: Long): Long {
         val offset = RETRY_OFFSETS_MS[(failureCount - 1).coerceIn(0, RETRY_OFFSETS_MS.lastIndex)]
         val jitter = 0.8 + randomUnit().coerceIn(0.0, 1.0) * 0.4
-        return maxOf(now, createdAt + (offset * jitter).toLong())
+        return maxOf(now, createdElapsedRealtimeMs + (offset * jitter).toLong())
+    }
+
+    private suspend fun ensureCurrentBoot() {
+        if (bootChecked) return
+        val stale = dao.fetchFromOtherBoots(bootAnchor())
+        if (stale.isNotEmpty()) {
+            dao.deleteByIds(stale.map { it.id })
+            expired.addAndGet(stale.size)
+        }
+        bootChecked = true
     }
 
     private suspend fun recoverInterruptedRequests(now: Long) {
@@ -327,6 +359,9 @@ internal class ReportManager(
         payloadBase64: String,
         latitude: Double?,
         longitude: Double?,
+        locationAccuracyMeters: Double?,
+        locationSource: String,
+        locationIsMock: Boolean,
         clientSeenAt: String,
     ): Boolean = runCatching {
         require(Regex("^[0-9a-fA-F]{16}$").matches(eidHex))
@@ -336,6 +371,13 @@ internal class ReportManager(
             require(latitude.isFinite() && longitude.isFinite())
             require(latitude in -90.0..90.0)
             require(longitude in -180.0..180.0)
+            require(locationAccuracyMeters != null && locationAccuracyMeters.isFinite())
+            require(locationAccuracyMeters >= 0.0)
+            require(locationSource == "sdk_fused" || locationSource == "host_supplied")
+        } else {
+            require(locationAccuracyMeters == null)
+            require(locationSource == "unknown")
+            require(!locationIsMock)
         }
         Instant.parse(clientSeenAt)
     }.isSuccess
@@ -364,7 +406,7 @@ internal class ReportManager(
             invalidCount = invalid.get(),
             queueFullCount = queueFull.get(),
             successRate = if (total > 0) accepted.toFloat() / total else 0f,
-            rateLimited = clockMs() < retryAfterMs.get(),
+            rateLimited = elapsedClockMs() < retryAfterMs.get(),
         )
     }
 }

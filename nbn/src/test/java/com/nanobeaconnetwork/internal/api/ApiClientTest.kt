@@ -46,6 +46,9 @@ class ApiClientTest {
             rssi = -70,
             latitude = 37.1,
             longitude = -122.2,
+            locationAccuracyMeters = 12.5,
+            locationSource = "sdk_fused",
+            locationIsMock = false,
             clientSeenAt = "2026-01-01T00:00:00Z",
         )
 
@@ -62,6 +65,9 @@ class ApiClientTest {
         assertEquals(-122.2, report.get("longitude").asDouble, 0.0)
         assertEquals("550e8400-e29b-41d4-a716-446655440000", json.get("batch_id").asString)
         assertEquals("550e8400-e29b-41d4-a716-446655440001", report.get("observation_id").asString)
+        assertEquals(12.5, report.get("location_accuracy_m").asDouble, 0.0)
+        assertEquals("sdk_fused", report.get("location_source").asString)
+        assertEquals(false, report.get("location_is_mock").asBoolean)
         assertEquals("2026-01-01T00:00:00Z", report.get("client_seen_at").asString)
         assertEquals(202, response.code())
         assertEquals("accepted", response.body()?.status)
@@ -92,7 +98,7 @@ class ApiClientTest {
         whenever(prefs.anonymousToken).doReturn("")
         lateinit var client: ApiClient
         client = ApiClient(prefs, ensureAnonymousTokenFn = {
-            val tokenResponse = client.service.anonymousToken(AnonymousTokenRequest("device"))
+            val tokenResponse = client.service.anonymousToken(AnonymousTokenRequest("key", "public", "signature"))
             tokenResponse.token
         })
         server.enqueue(

@@ -9,7 +9,7 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["observationId"], unique = true),
         Index(value = ["sourceKey", "slot"], unique = true),
-        Index(value = ["slot", "nextAttemptAt"]),
+        Index(value = ["slot", "nextAttemptElapsedRealtimeMs"]),
         Index(value = ["batchId"]),
     ],
 )
@@ -24,15 +24,21 @@ internal data class PendingReport(
     val rssi: Int,
     val latitude: Double?,
     val longitude: Double?,
+    val locationAccuracyMeters: Double?,
+    val locationSource: String,
+    val locationIsMock: Boolean,
     val clientSeenAt: String,
     val failedAttempts: Int = 0,
-    val createdAt: Long,
-    val expiresAt: Long,
-    val nextAttemptAt: Long,
+    val createdElapsedRealtimeMs: Long,
+    val createdWallTimeMs: Long,
+    val bootAnchor: String,
+    val expiresElapsedRealtimeMs: Long,
+    val nextAttemptElapsedRealtimeMs: Long,
 ) {
     fun estimatedBytes(): Long =
         observationId.length + sourceKey.length + (batchId?.length ?: 0) + eidHex.length +
-            payloadBase64.length + clientSeenAt.length + ESTIMATED_ROW_OVERHEAD
+            payloadBase64.length + locationSource.length + clientSeenAt.length + bootAnchor.length +
+            ESTIMATED_ROW_OVERHEAD
 
     companion object {
         const val SLOT_PENDING = "pending_latest"
