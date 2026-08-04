@@ -61,10 +61,18 @@ fun HomeScreen(navController: NavController, vm: HomeViewModel = viewModel()) {
                     Text("Pending: ${stats.pendingCount}")
                     Text("Success: ${"%.0f".format(stats.successRate * 100)}%")
                 }
-                if (stats.droppedCount > 0) {
-                    // Uploads reached the server but it silently dropped these (unknown/forged EID).
-                    Text("Dropped by server: ${stats.droppedCount}",
-                        color = MaterialTheme.colorScheme.error)
+                // Observations that will never reach the server. Surfaced instead of silently
+                // vanishing from the queue.
+                val discarded = stats.failedCount + stats.expiredCount +
+                    stats.invalidCount + stats.queueFullCount
+                if (discarded > 0) {
+                    Text("Discarded: $discarded", color = MaterialTheme.colorScheme.error)
+                    Text(
+                        "failed ${stats.failedCount} · expired ${stats.expiredCount} · " +
+                            "invalid ${stats.invalidCount} · queue full ${stats.queueFullCount}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
         }
