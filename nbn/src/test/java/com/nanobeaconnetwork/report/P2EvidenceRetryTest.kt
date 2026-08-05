@@ -38,6 +38,7 @@ class P2EvidenceRetryTest {
         whenever(configPrefs.reportMinIntervalSeconds).doReturn(0)
         whenever(configPrefs.reportBatchThreshold).doReturn(50)
         whenever(configPrefs.dedupWindowSeconds).doReturn(300)
+        whenever(configPrefs.sourceMinIntervalSeconds).doReturn(300)
         val signatures = AtomicInteger()
         var now = 1_000L
         val manager = ReportManager(

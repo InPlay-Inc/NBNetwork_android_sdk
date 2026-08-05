@@ -26,6 +26,7 @@ import retrofit2.Response
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
@@ -39,6 +40,7 @@ private const val MAX_QUEUE_ITEMS = 50_000
 private const val MAX_QUEUE_BYTES = 50L * 1024 * 1024
 private const val BATCH_SIZE = 50
 private const val RETENTION_MS = 5L * 60 * 1000
+private const val MAX_ACCEPTED_SOURCES = 2_000
 private const val MAX_RETRY_AFTER_SECONDS = 86_400L
 private val RETRY_OFFSETS_MS = longArrayOf(60_000, 180_000, 420_000, 900_000, 1_800_000)
 
@@ -73,7 +75,15 @@ internal class ReportManager(
     private val expired = AtomicInteger(0)
     private val invalid = AtomicInteger(0)
     private val queueFull = AtomicInteger(0)
+    private val throttled = AtomicInteger(0)
     private var flushJob: Job? = null
+
+    /**
+     * sourceKey -> elapsed-realtime of the last durable server accept for that source. Backs the
+     * [isThrottled] gate. In-memory by design: the throttle is a client-side upload budget, not a
+     * correctness guarantee, so a process restart resets it.
+     */
+    private val lastAcceptedBySource = ConcurrentHashMap<String, Long>()
 
     fun start() {
         flushJob = scope.launch {
@@ -86,6 +96,24 @@ internal class ReportManager(
 
     fun stop() {
         flushJob?.cancel()
+    }
+
+    /**
+     * True when [sourceKey] was durably accepted by the server less than
+     * [ServerConfigManager.sourceMinIntervalMs] ago, so this sighting must not be uploaded.
+     *
+     * Only a successful 202 arms the gate. A source whose uploads keep failing is never throttled —
+     * it has not been reported yet, so retries must stay free to run.
+     */
+    fun isThrottled(sourceKey: String): Boolean {
+        val last = lastAcceptedBySource[sourceKey] ?: return false
+        return elapsedClockMs() - last < configManager.sourceMinIntervalMs
+    }
+
+    /** Records a sighting dropped by [isThrottled] so the caller's UI can report it. */
+    suspend fun noteThrottled() {
+        throttled.incrementAndGet()
+        updateStats()
     }
 
     suspend fun enqueue(
@@ -118,7 +146,7 @@ internal class ReportManager(
         }
 
         val nowElapsed = elapsedClockMs()
-        ensureCurrentBoot()
+        discardRowsFromPreviousSessions()
         val previous = dao.findPending(sourceKey)
         val next = PendingReport(
             id = previous?.id ?: 0,
@@ -158,7 +186,7 @@ internal class ReportManager(
         val now = elapsedClockMs()
         queueMutex.withLock {
             if (!recovered) {
-                ensureCurrentBoot()
+                discardRowsFromPreviousSessions()
                 recoverInterruptedRequests(now)
                 recovered = true
             }
@@ -214,6 +242,8 @@ internal class ReportManager(
         if (response.code() == 202 && body?.status == "accepted" && body.batchId == batchId) {
             queueMutex.withLock { dao.deleteByIds(pending.map { it.id }) }
             todayAccepted.addAndGet(pending.size)
+            pending.forEach { lastAcceptedBySource[it.sourceKey] = now }
+            pruneAcceptedSources(now)
             _flushResults.tryEmit(FlushResult(pending.map { it.eidHex.take(8) }))
             retryAfterMs.set(0)
             globalBackoffMs = 1_000L
@@ -320,12 +350,20 @@ internal class ReportManager(
         return maxOf(now, createdElapsedRealtimeMs + (offset * jitter).toLong())
     }
 
-    private suspend fun ensureCurrentBoot() {
+    /**
+     * Drops every row left over from an earlier session — a previous device boot or a previous
+     * process of this app — without uploading it. The queue is deliberately not carried across a
+     * restart: the scan log and the scan/report counters live in memory and reset with the
+     * process, so uploading rows this process never scanned would report more observations than it
+     * scanned. Rows enqueued by *this* process carry the current anchor and are never touched.
+     */
+    private suspend fun discardRowsFromPreviousSessions() {
         if (bootChecked) return
         val stale = dao.fetchFromOtherBoots(bootAnchor())
         if (stale.isNotEmpty()) {
             dao.deleteByIds(stale.map { it.id })
             expired.addAndGet(stale.size)
+            Log.i(TAG, "Discarded ${stale.size} queued observations from a previous session")
         }
         bootChecked = true
     }
@@ -394,6 +432,22 @@ internal class ReportManager(
         }
     }
 
+    /**
+     * Keeps [lastAcceptedBySource] bounded. Entries past the throttle interval can no longer gate
+     * anything, so they go first; a still-live overflow is trimmed oldest-first.
+     */
+    private fun pruneAcceptedSources(now: Long) {
+        if (lastAcceptedBySource.size <= MAX_ACCEPTED_SOURCES) return
+        val intervalMs = configManager.sourceMinIntervalMs
+        lastAcceptedBySource.entries.removeIf { now - it.value >= intervalMs }
+        val overflow = lastAcceptedBySource.size - MAX_ACCEPTED_SOURCES
+        if (overflow > 0) {
+            lastAcceptedBySource.entries.sortedBy { it.value }.take(overflow).forEach { entry ->
+                lastAcceptedBySource.remove(entry.key, entry.value)
+            }
+        }
+    }
+
     private suspend fun updateStats() {
         val total = todayScan.get()
         val accepted = todayAccepted.get()
@@ -405,6 +459,9 @@ internal class ReportManager(
             expiredCount = expired.get(),
             invalidCount = invalid.get(),
             queueFullCount = queueFull.get(),
+            throttledCount = throttled.get(),
+            // Throttled sightings are deliberately withheld, never attempted, so they stay out of
+            // both the numerator and the denominator — counting them would depress the rate.
             successRate = if (total > 0) accepted.toFloat() / total else 0f,
             rateLimited = elapsedClockMs() < retryAfterMs.get(),
         )

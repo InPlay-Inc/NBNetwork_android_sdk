@@ -314,7 +314,7 @@ object NbnClient {
 
     /**
      * Central scan-result pipeline, shared by LIBRARY_SCAN (BleScanService) and HOST_SCAN
-     * (submitScanResult/submitServiceData): dedup -> location -> enqueue -> emit.
+     * (submitScanResult/submitServiceData): throttle -> dedup -> location -> enqueue -> emit.
      * [explicitLocation] overrides the library's own location lookup when the caller already has one.
      */
     internal fun internalOnScanResult(
@@ -323,7 +323,21 @@ object NbnClient {
         explicitLocation: Location? = null,
     ) {
         sdkScope.launch {
-            // Suppress only an exact repeated broadcast from the same source. Including the
+            // Coarse gate first: one upload per source per source_min_interval_seconds, regardless
+            // of payload. Checked before the location lookup below, which costs a real fused-location
+            // call per sighting. sourceKey is "this BLE address, or the EID when none is available".
+            val sourceKey = SourceKeyFactory.create(bleAddress, eidHex, prefs.sourceKeyHmacKey)
+            if (reportManager.isThrottled(sourceKey)) {
+                reportManager.noteThrottled()
+                _scanEvents.emit(
+                    ScanEvent(eidHex = eidHex, rssi = rssi,
+                        timestamp = System.currentTimeMillis(), reported = false),
+                )
+                addScanLog(eidHex.take(8), rssi, "Skipped")
+                return@launch
+            }
+
+            // Then suppress an exact repeated broadcast from the same source. Including the
             // payload is essential: a changed payload from the same BLE MAC is new data and
             // must reach ReportManager so it can replace that source's pending_latest row.
             val physicalKey = bleAddress?.takeIf { it.isNotBlank() } ?: eidHex
@@ -350,7 +364,6 @@ object NbnClient {
                     else -> "sdk_fused"
                 }
                 val locationIsMock = usableLocation?.let(LocationCompat::isMock) ?: false
-                val sourceKey = SourceKeyFactory.create(bleAddress, eidHex, prefs.sourceKeyHmacKey)
                 status = when (reportManager.enqueue(
                     sourceKey, eidHex, payloadHex, rssi, lat, lon, accuracy,
                     locationSource, locationIsMock, timestamp,

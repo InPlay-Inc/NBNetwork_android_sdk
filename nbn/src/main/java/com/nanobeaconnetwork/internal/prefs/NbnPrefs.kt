@@ -61,6 +61,10 @@ internal class NbnPrefs(context: Context) {
         get() = prefs.getInt(KEY_BATCH_THRESHOLD, 50)
         set(v) = prefs.edit().putInt(KEY_BATCH_THRESHOLD, v).apply()
 
+    var sourceMinIntervalSeconds: Int
+        get() = prefs.getInt(KEY_SOURCE_MIN_INTERVAL, 300)
+        set(v) = prefs.edit().putInt(KEY_SOURCE_MIN_INTERVAL, v).apply()
+
     /**
      * Per-install SQLCipher passphrase. Generated once with [SecureRandom] and persisted in the
      * Keystore-backed encrypted prefs, so the local database is never protected by a value baked
@@ -92,6 +96,7 @@ internal class NbnPrefs(context: Context) {
         private const val KEY_DEDUP_WINDOW = "dedup_window_seconds"
         private const val KEY_REPORT_MIN_INTERVAL = "report_min_interval_seconds"
         private const val KEY_BATCH_THRESHOLD = "report_batch_threshold"
+        private const val KEY_SOURCE_MIN_INTERVAL = "source_min_interval_seconds"
         private const val KEY_DB_PASSPHRASE = "db_passphrase"
         private const val KEY_SOURCE_HMAC = "source_key_hmac"
         private const val KEY_ANONYMOUS_TOKEN_INSTALLATION_KEY_ID = "anonymous_token_installation_key_id"

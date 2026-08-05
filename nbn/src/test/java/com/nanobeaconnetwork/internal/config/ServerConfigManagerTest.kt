@@ -17,12 +17,14 @@ class ServerConfigManagerTest {
                 "dedup_window_seconds" to "600",
                 "report_min_interval_seconds" to 30.0,
                 "report_batch_threshold" to 200,
+                "source_min_interval_seconds" to "600",
             )
         )
 
         verify(prefs).dedupWindowSeconds = 600
         verify(prefs).reportMinIntervalSeconds = 30
         verify(prefs).reportBatchThreshold = 200
+        verify(prefs).sourceMinIntervalSeconds = 600
     }
 
     @Test fun `ignores malformed and out of range server values`() {
@@ -34,6 +36,7 @@ class ServerConfigManagerTest {
                 "dedup_window_seconds" to 29,
                 "report_min_interval_seconds" to "invalid",
                 "report_batch_threshold" to 501,
+                "source_min_interval_seconds" to 3601,
             )
         )
 
@@ -47,9 +50,11 @@ class ServerConfigManagerTest {
         manager.dedupWindowMs = 1
         manager.reportMinIntervalMs = Long.MAX_VALUE
         manager.batchThreshold = 1
+        manager.sourceMinIntervalMs = 1
 
         verify(prefs).dedupWindowSeconds = 30
         verify(prefs).reportMinIntervalSeconds = 300
         verify(prefs).reportBatchThreshold = 10
+        verify(prefs).sourceMinIntervalSeconds = 30
     }
 }

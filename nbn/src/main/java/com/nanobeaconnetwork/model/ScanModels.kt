@@ -18,5 +18,7 @@ data class ScanLogEntry(
     val time: String,
     val eidPrefix: String,
     val rssi: Int,
-    val status: String, // "Queued" | "Accepted" | "Duplicate" | "QueueFull" | "Invalid"
+    // "Skipped" = withheld by source_min_interval_seconds; "Duplicate" = identical broadcast
+    // inside dedup_window_seconds. Neither is a failure.
+    val status: String, // "Queued" | "Accepted" | "Skipped" | "Duplicate" | "QueueFull" | "Invalid"
 )

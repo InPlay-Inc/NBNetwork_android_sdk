@@ -399,7 +399,7 @@ lifecycleScope.launch { NbnClient.reportStats.collect { s -> updateUi(s.pendingC
 |---|---|---|
 | `scanState` | `StateFlow<ScanState>` | `isScanning`, `bleEnabled`, `gpsEnabled`, `hasPermissions` (driven by the library only in LIBRARY_SCAN mode) |
 | `scanEvents` | `SharedFlow<ScanEvent>` | one per scanned beacon: `eidHex`, `rssi`, `timestamp`, `reported` (false = de-duped) |
-| `reportStats` | `StateFlow<ReportStats>` | scan/report counts, pending rows, terminal failure/expiry/invalid/queue-full counters, `successRate`, `rateLimited` |
+| `reportStats` | `StateFlow<ReportStats>` | scan/report counts, pending rows, terminal failure/expiry/invalid/queue-full counters, `throttledCount` (deliberately skipped, not a failure), `successRate`, `rateLimited` |
 | `scanLogs` | `StateFlow<List<ScanLogEntry>>` | last 100 log lines (time, EID prefix, rssi, status) |
 
 ### Report queue behavior
@@ -418,6 +418,14 @@ lifecycleScope.launch { NbnClient.reportStats.collect { s -> updateUi(s.pendingC
   the observation. `429/503` do not consume an attempt but cannot extend the one-hour lifetime.
 - Queue capacity is 50,000 rows or an estimated 50 MiB. A new source is rejected with `QueueFull`
   when full; existing rows are not silently evicted.
+- **The queue does not survive a process restart.** Rows still queued when the process dies are
+  discarded on the next launch instead of uploaded, and counted in `expiredCount`. This is
+  deliberate: the scan log and the scan/report counters live in memory and reset with the process,
+  so uploading rows the new process never scanned would report more observations than it scanned.
+  The practical cost is bounded — an observation is only retained for five minutes anyway — but it
+  does mean observations pending at the moment the app is killed never reach the server.
+  Within a single process the queue behaves exactly as described above, retrying across network
+  failures and app backgrounding.
 
 ---
 
@@ -476,6 +484,13 @@ or collecting via `kotlinx-coroutines-jdk`.)
   `invalidCount`, and `queueFullCount` for terminal outcomes.
 - **Duplicate-looking beacons not all reported** → by design: the same EID within the server's
   dedup window is reported once (`ScanEvent.reported = false` marks the de-duped ones).
+- **A beacon is only reported once every few minutes** → by design, and this is usually what you
+  are seeing rather than a bug. After a source is durably accepted, further sightings of that same
+  BLE address (or EID, when no address is available) are dropped for
+  `source_min_interval_seconds` (server-configured, default 300). They are counted in
+  `throttledCount` — a deliberate skip, so keep it out of any error total you display. Note this is
+  per BLE address, not per physical device: a beacon that rotates its address gets a fresh budget
+  per address.
 
 ---
 
@@ -511,7 +526,7 @@ Java callers use `NbnClient.INSTANCE` / `NbnPermissions.INSTANCE`.
 | `submitServiceData(serviceData: ByteArray, rssi: Int, location: Location? = null, bleAddress: String? = null)` | **HOST_SCAN only.** Feed the raw `0xFC32` service data (for cross-platform BLE libraries). `location = null` lets the library fetch one. |
 | `setScanMode(mode: NbnConfig.ScanMode)` | Applies the next time scanning starts — `stopScan()` + `startScan()` to apply it to an active scan. |
 | `setRestartOnBoot(enable: Boolean)` | Opt out of (or back into) reboot recovery at runtime. |
-| `shutdown()` | Stops scanning and releases resources. Does not erase queued reports. |
+| `shutdown()` | Stops scanning and releases resources. Does not erase queued reports, but anything still queued is discarded on the next process start rather than uploaded. |
 
 Observable state (all cold-safe to collect at any time):
 
@@ -553,5 +568,5 @@ Enums: `ScanSource { LIBRARY_SCAN, HOST_SCAN }` ·
 |---|---|
 | `ScanState` | `isScanning`, `bleEnabled`, `gpsEnabled`, `hasPermissions` |
 | `ScanEvent` | `eidHex`, `rssi`, `timestamp`, `reported` (`false` = de-duplicated) |
-| `ScanLogEntry` | `time`, `eidPrefix`, `rssi`, `status` (`Queued` / `Reported` / `Duplicate` / `Failed`) |
-| `ReportStats` | `todayScanCount`, `todayReportCount`, `pendingCount`, `failedCount`, `expiredCount`, `invalidCount`, `queueFullCount`, `successRate`, `rateLimited` |
+| `ScanLogEntry` | `time`, `eidPrefix`, `rssi`, `status` (`Queued` / `Accepted` / `Skipped` / `Duplicate` / `QueueFull` / `Invalid`) |
+| `ReportStats` | `todayScanCount`, `todayReportCount`, `pendingCount`, `failedCount`, `expiredCount`, `invalidCount`, `queueFullCount`, `throttledCount`, `successRate`, `rateLimited` |

@@ -39,6 +39,7 @@ class ReportManagerTest {
         whenever(prefs.reportMinIntervalSeconds).doReturn(0)
         whenever(prefs.reportBatchThreshold).doReturn(50)
         whenever(prefs.dedupWindowSeconds).doReturn(300)
+        whenever(prefs.sourceMinIntervalSeconds).doReturn(300)
         return ServerConfigManager(prefs)
     }
 
@@ -126,6 +127,64 @@ class ReportManagerTest {
         assertEquals("unknown", report.get("location_source").asString)
         assertFalse(report.get("location_is_mock").asBoolean)
         assertTrue(report.get("longitude").isJsonNull)
+    }
+
+    @Test fun `durable accept throttles that source until the interval elapses`() = runTest {
+        val dao = FakeDao()
+        var now = 1_000L
+        val manager = manager(dao) { now }
+        echoAccepted()
+
+        assertFalse(manager.isThrottled("mac:source-a"))
+        enqueue(manager)
+        manager.tryFlush()
+
+        assertTrue(manager.isThrottled("mac:source-a"))
+        now += 299_999
+        assertTrue(manager.isThrottled("mac:source-a"))
+        now += 1
+        assertFalse(manager.isThrottled("mac:source-a"))
+    }
+
+    @Test fun `throttle is per source and does not leak across sources`() = runTest {
+        val dao = FakeDao()
+        val manager = manager(dao) { 1_000L }
+        echoAccepted()
+
+        enqueue(manager, source = "mac:source-a")
+        manager.tryFlush()
+
+        assertTrue(manager.isThrottled("mac:source-a"))
+        assertFalse(manager.isThrottled("mac:source-b"))
+        assertFalse(manager.isThrottled("eid:0011223344556677"))
+    }
+
+    @Test fun `failed upload leaves the source unthrottled so retries stay free`() = runTest {
+        val dao = FakeDao()
+        val manager = manager(dao) { 1_000L }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(500)
+        }
+
+        enqueue(manager)
+        manager.tryFlush()
+
+        assertFalse(manager.isThrottled("mac:source-a"))
+    }
+
+    @Test fun `throttled sightings are counted apart from the discard buckets`() = runTest {
+        val dao = FakeDao()
+        val manager = manager(dao) { 1_000L }
+
+        manager.noteThrottled()
+        manager.noteThrottled()
+
+        val stats = manager.stats.value
+        assertEquals(2, stats.throttledCount)
+        assertEquals(0, stats.failedCount)
+        assertEquals(0, stats.expiredCount)
+        assertEquals(0, stats.invalidCount)
+        assertEquals(0, stats.queueFullCount)
     }
 
     @Test fun `one missing coordinate is rejected before queueing`() = runTest {
@@ -369,6 +428,39 @@ class ReportManagerTest {
         assertEquals(1, secondBoot.stats.value.expiredCount)
         assertEquals(0, server.requestCount)
     }
+
+    @Test fun `rows from a previous process of the same boot are discarded without upload`() = runTest {
+        val dao = FakeDao()
+        // Same boot counter, different process UUID — the anchor BootSessionClock produces.
+        val firstRun = manager(dao, { 100_000L }, { 10_000L }, "boot:7|proc:aaa")
+        enqueue(firstRun)
+        assertEquals(1, dao.snapshot().size)
+        echoAccepted()
+
+        val secondRun = manager(dao, { 200_000L }, { 11_000L }, "boot:7|proc:bbb")
+        secondRun.tryFlush()
+
+        assertTrue(dao.snapshot().isEmpty())
+        assertEquals(0, server.requestCount)
+        // Never scanned by this process, so it must not be counted as reported either.
+        assertEquals(0, secondRun.stats.value.todayReportCount)
+        assertEquals(0, secondRun.stats.value.todayScanCount)
+    }
+
+    @Test fun `rows enqueued by this process survive the startup purge`() = runTest {
+        val dao = FakeDao()
+        val manager = manager(dao, { 100_000L }, { 10_000L }, "boot:7|proc:aaa")
+        echoAccepted()
+
+        enqueue(manager)
+        manager.tryFlush()
+
+        assertEquals(1, server.requestCount)
+        assertEquals(1, manager.stats.value.todayScanCount)
+        assertEquals(1, manager.stats.value.todayReportCount)
+        assertEquals(0, manager.stats.value.expiredCount)
+    }
+
     @Test fun `full queue returns QueueFull without deleting another source`() = runTest {
         val dao = FakeDao(baseCount = 50_000)
         val manager = manager(dao) { 1_000L }

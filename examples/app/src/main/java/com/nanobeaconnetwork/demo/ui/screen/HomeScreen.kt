@@ -61,6 +61,16 @@ fun HomeScreen(navController: NavController, vm: HomeViewModel = viewModel()) {
                     Text("Pending: ${stats.pendingCount}")
                     Text("Success: ${"%.0f".format(stats.successRate * 100)}%")
                 }
+                // Deliberately withheld by the per-address/EID upload interval. Kept out of the
+                // error-coloured Discarded bucket below: this is the throttle working, not loss.
+                if (stats.throttledCount > 0) {
+                    Text("Skipped: ${stats.throttledCount}", color = Color.Gray)
+                    Text(
+                        "same address/EID already reported within source_min_interval_seconds",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray,
+                    )
+                }
                 // Observations that will never reach the server. Surfaced instead of silently
                 // vanishing from the queue.
                 val discarded = stats.failedCount + stats.expiredCount +
@@ -92,8 +102,13 @@ fun HomeScreen(navController: NavController, vm: HomeViewModel = viewModel()) {
                     Text(entry.status,
                         style = MaterialTheme.typography.bodySmall,
                         color = when (entry.status) {
-                            "Reported" -> Color(0xFF2E7D32)
+                            // "Accepted" is what the SDK actually writes after a matching 202
+                            // (see ScanLogEntry.status); "Reported" was never produced, so this
+                            // branch used to be dead and accepted rows rendered as errors.
+                            "Accepted" -> Color(0xFF2E7D32)
                             "Queued" -> Color(0xFFE65100) // amber: enqueued, not yet server-confirmed
+                            // Skipped/Duplicate are both deliberate suppression, not errors.
+                            "Skipped" -> Color.Gray
                             "Duplicate" -> Color.Gray
                             else -> MaterialTheme.colorScheme.error
                         })
